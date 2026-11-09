@@ -118,4 +118,19 @@ test('installed MV3 extension configures, translates, protects storage and resto
   assert.match(await reopened.locator('#key-status').textContent(),/锁定/);
   await reopened.locator('#unlock-password').fill('a-long-test-password');await reopened.locator('#btn-unlock').click();
   await reopened.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('已解锁'));
+  // Default (no password) mode: the key must survive a full browser restart without any prompt.
+  await reopened.locator('#api-key').fill('persisted-key');
+  await reopened.locator('#btn-save').click();
+  await reopened.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('无需重新输入'));
+  await context.close();
+  context=await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`]});
+  const restarted=await context.newPage();await restarted.goto(`chrome-extension://${id}/options/options.html`);
+  await restarted.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('无需重新输入'));
+  assert.equal(await restarted.locator('#unlock-fields').isVisible(),false);
+  const view=await restarted.evaluate(()=>chrome.runtime.sendMessage({type:'GET_SETTINGS'}));
+  assert.equal(view.hasKey,true);assert.equal(view.hasVault,false);
+  requests.length=0;
+  await restarted.locator('#service-consent').check();await restarted.locator('#btn-test').click();
+  await restarted.waitForFunction(()=>document.querySelector('#test-result').textContent.includes('连接成功'));
+  assert.equal(requests.length,1,'translation works after restart without re-entering the key');
 });

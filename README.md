@@ -10,7 +10,7 @@
 支持 Google 翻译和任意 OpenAI 兼容的 AI 接口（通义千问 / OpenAI / 本机 vLLM），API Key 只留在你自己的浏览器里。
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-安装-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/dkjbikoamkfpmmfaodleccdefonkjebb)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-34A853)
 ![Chrome 120+](https://img.shields.io/badge/Chrome-120%2B-FBBC04)
 ![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-lightgrey)
@@ -30,7 +30,7 @@
 | 📖 **双语对照，不破坏排版** | 译文以独立段落插入原文下方，原始 DOM 节点不被包裹、移动或克隆。一键“恢复原文”即可完整还原。 |
 | 🖱️ **按需翻译，滚动续译** | 默认只翻译视口附近的内容，滚动后继续；动态加载的内容优先扫描局部区域，不会一次性发出几百个请求。 |
 | 🤖 **自带模型（BYOK）** | Google 免费通道开箱即用；也可以填入自己的 API Key，接入通义千问、OpenAI 或任何 `/chat/completions` 兼容接口，包括本机 vLLM。 |
-| 🔐 **密钥留在本机** | API Key 默认只存于当前浏览器会话；需要长期保存时可用密码 AES‑GCM 加密，密码本身不落盘。所有设置不走 Chrome 同步。 |
+| 🔐 **密钥留在本机** | API Key 保存在本机扩展存储，重启浏览器无需重输，不走 Chrome 同步，网页脚本读不到。追求更高安全性时可改为密码 AES‑GCM 加密保存，密码本身不落盘。 |
 | 🎨 **三种译文样式** | 底线 / 左边框 / 高亮背景，颜色可跟随原文或自定义，支持深色模式。 |
 | 🛡️ **默认保护敏感区域** | 输入框、编辑器、代码块、隐藏元素和 `translate="no"` 标记默认不翻译；菜单/按钮翻译按需开启。 |
 | ♻️ **可中断、可重试、可缓存** | 停止会取消排队和在途请求；部分失败可只重试未完成段落；已完成译文按服务 / 模型 / 语言缓存，回退页面零成本。 |
@@ -114,7 +114,7 @@
 ## 🔒 隐私与安全设计
 
 - **无常驻网站权限**：Manifest 不含 `host_permissions` 和静态 `content_scripts`。手动翻译使用 `activeTab` 按需注入；服务访问和“始终翻译”站点在你操作时才请求授权。
-- **密钥隔离**：API Key 默认仅存于 `chrome.storage.session`；选择“用密码加密记住”后以 AES‑GCM 加密保存在本机，重启后需输入密码解锁，密码本身不保存。内容脚本无法读取密钥存储，请求由后台读取受信任配置发出。
+- **密钥隔离**：API Key 默认保存在 `chrome.storage.local`（访问级别限定为扩展自身页面，不同步），重启浏览器后直接可用。勾选“用密码加密保存”则不再保留明文，以 AES‑GCM 加密存放，每次启动浏览器后需输入密码解锁，密码本身不保存。内容脚本无法读取密钥存储，请求由后台读取受信任配置发出。
 - **不走同步**：所有设置、站点偏好、缓存都留在本机，不写入 `chrome.storage.sync`。
 - **透明的接收方**：弹窗和设置页都会明确显示“待译文字发送至 …”，并需要你勾选同意。
 - 详见 [隐私说明](privacy.html)。
@@ -126,7 +126,7 @@
 - 支持普通 HTTP(S) 网页；Chrome 内部页面、应用商店、内置 PDF 查看器、跨域 iframe 和 Shadow DOM 目前不在完整支持范围内。
 - Google 通道有网络与频率限制，扩展不承诺无限免费或服务可用性；AI 接口费用由所选服务商收取。
 - Linear / LiteLLM 控制台有内置词典适配以保留布局；自定义 LiteLLM 地址在“高级设置”中填写。
-- 1.1.0 采用新的配置结构，不迁移旧版设置。
+- 1.1.0 采用新的配置结构，不迁移旧版设置。1.1.1 起 API Key 默认持久保存；从 1.1.0 升级的用户需再输入一次密钥，之后不再提示。
 
 ---
 
@@ -138,7 +138,7 @@
 npm ci                          # 安装 Playwright
 npx playwright install chromium # 下载测试用 Chromium
 npm test                        # 单元测试 + 浏览器测试
-npm run package                 # 生成 dist/transLite-1.1.0.zip
+npm run package                 # 生成 dist/transLite-1.1.1.zip
 ```
 
 ### 测试覆盖
@@ -148,7 +148,7 @@ npm run package                 # 生成 dist/transLite-1.1.0.zip
 | 单元测试 (`tests/*.mjs`) | 请求与权限边界、模型参数策略、密钥 AES‑GCM 加密与解锁、URL 校验、取消 / 重试、DOM 分段与恢复、Linear / LiteLLM 适配器 |
 | 浏览器测试 (`tests/browser/*.mjs`) | 真实 DOM 与动态网页的增量翻译、弹窗停止 / 部分失败状态、**安装后的 MV3 扩展全流程**（真实 service worker、扩展存储、连接测试、站点自动注册 / 移除、后台强制终止后唤醒、重启后解锁） |
 
-网络测试只连接本机模拟服务，不使用真实 API Key，不消耗付费额度。安装测试仅在临时 Manifest 中预授权 `http://127.0.0.1/*` 以绕过无头模式无法操作的原生权限弹窗；正式 Manifest 保持按需授权，打包脚本会校验这一点。原生授权弹窗和真实服务的人工验收项见 [发布说明](docs/release-1.1.0.md)。
+网络测试只连接本机模拟服务，不使用真实 API Key，不消耗付费额度。安装测试仅在临时 Manifest 中预授权 `http://127.0.0.1/*` 以绕过无头模式无法操作的原生权限弹窗；正式 Manifest 保持按需授权，打包脚本会校验这一点。原生授权弹窗和真实服务的人工验收项见 [发布说明](docs/release-1.1.1.md)。
 
 ### 打包
 

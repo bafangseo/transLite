@@ -68,8 +68,8 @@
 
           <div class="field key-controls">
             <p id="key-status" class="field-hint" role="status"></p>
-            <label><input type="checkbox" id="remember-key"> 用密码加密记住新密钥</label>
-            <div id="remember-fields" class="hidden"><label class="field-label" for="vault-password">解锁密码</label><input type="password" id="vault-password" minlength="12" autocomplete="new-password" placeholder="至少 12 位，密码不会被保存"><p class="field-hint">密钥加密保存在本机；重新启动浏览器后需解锁。忘记密码时可清除后重新配置。</p></div>
+            <label><input type="checkbox" id="remember-key"> 用密码加密保存（更安全；每次启动浏览器后需输入密码解锁）</label>
+            <div id="remember-fields" class="hidden"><label class="field-label" for="vault-password">解锁密码</label><input type="password" id="vault-password" minlength="12" autocomplete="new-password" placeholder="至少 12 位，密码不会被保存"><p class="field-hint">密钥以加密形式保存在本机，不再保留明文副本；重新启动浏览器后需解锁。忘记密码时可清除后重新配置。</p></div>
             <div id="unlock-fields" class="hidden"><label class="field-label" for="unlock-password">解锁已保存的密钥</label><div class="model-row"><input type="password" id="unlock-password" autocomplete="current-password" placeholder="输入解锁密码"><button type="button" id="btn-unlock" class="btn-reset">解锁</button></div></div>
             <button type="button" id="btn-clear-key" class="text-button">清除密钥和加密副本</button>
           </div>

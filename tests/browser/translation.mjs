@@ -216,7 +216,8 @@ test('table, grid, fixed-height widgets, long prose and excluded ancestors keep 
     article,.grid,table{background:white;padding:20px;margin:16px 0;border-radius:10px} .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
     table{width:100%;border-collapse:collapse} td,th{border:1px solid #dde2e8;padding:8px;text-align:left}
     .clipped{height:24px;overflow:hidden;white-space:nowrap}
-  </style><main><h1>Translation layout preview</h1><article><p id="prose">Read the <strong>complete documentation</strong> before <a href="#">installing the package</a>.</p>
+    .clip-wrap{overflow:clip;min-height:240px}
+  </style><main><h1>Translation layout preview</h1><article><div class="clip-wrap"><p id="prose">Read the <strong>complete documentation</strong> before <a href="#">installing the package</a>.</p></div>
   <ul><li id="mixed">Read this parent text first.<p>Then read this nested paragraph.</p>And finish with this final text.</li></ul></article>
   <div class="grid" id="grid"><div>Project overview</div><div>Team notifications</div></div>
   <table><tr><th>Project name</th><th>Current status</th></tr><tr><td>Customer workspace</td><td>Ready for review</td></tr></table>
@@ -229,6 +230,9 @@ test('table, grid, fixed-height widgets, long prose and excluded ancestors keep 
   await page.screenshot({ path: path.join(root, 'test-results/layout-before.png'), fullPage: true });
   await page.evaluate(() => window.send('START_TRANSLATION'));
   assert.equal(await page.locator('td .lt-result, th .lt-result, .clipped .lt-result, #grid > .lt-result').count(), 0);
+  // A tall overflow:clip wrapper (Hugging Face blog layout) must not split prose into per-link fragments.
+  assert.equal(await page.locator('#prose > .lt-result').count(), 1);
+  assert.ok(await page.evaluate(() => window.requests.flat().includes('Read the complete documentation before installing the package.')));
   assert.equal(await page.locator('#grid > div').count(), 2);
   assert.equal(await page.locator('#mixed .lt-wrap').count(), 0);
   assert.equal(await page.locator('#mixed .lt-result').count(), 3);

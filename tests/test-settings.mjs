@@ -33,10 +33,13 @@ test('only trusted extension UI can configure credentials; page settings and mes
   const h=harness();
   await h.send({type:'SAVE_SETTINGS',settings:{service:'openai',apiKey:'must-be-ignored'},apiKey:'fixture-secret',consent:true});
   assert.deepEqual(h.levels,{local:'TRUSTED_CONTEXTS',sync:'TRUSTED_CONTEXTS',session:'TRUSTED_CONTEXTS'});
-  assert.equal(JSON.stringify(h.data.local).includes('fixture-secret'),false);
+  assert.equal(h.data.local.credential.apiKey,'fixture-secret','plain keys persist locally so a browser restart does not ask again');
+  assert.equal(JSON.stringify(h.data.local.preferences).includes('fixture-secret'),false);
   assert.equal(JSON.stringify(h.data.sync).includes('fixture-secret'),false);
-  assert.equal(h.data.session.credential.apiKey,'fixture-secret');
+  assert.equal(h.data.session.credential,undefined);
   assert.equal(JSON.stringify(h.sent).includes('fixture-secret'),false);
+  h.data.session={}; // browser restart clears session storage
+  assert.equal((await h.send({type:'GET_SETTINGS'})).hasKey,true);
   const page=await h.send({type:'GET_PAGE_SETTINGS'},h.page);
   assert.equal('apiKey' in page.settings,false);assert.equal('apiBaseUrl' in page.settings,false);
   await assert.rejects(h.send({type:'GET_SETTINGS'},h.page),/无权/);
@@ -51,15 +54,30 @@ test('credentials are bound to the configured endpoint and encrypted vault needs
   const h=harness();
   const settings={service:'openai'};
   await h.send({type:'SAVE_SETTINGS',settings,apiKey:'fixture-secret',rememberKey:true,password:'test-password-long',consent:true});
-  assert.equal(JSON.stringify(h.data.local).includes('fixture-secret'),false);
+  assert.equal(JSON.stringify(h.data.local).includes('fixture-secret'),false,'password mode must not keep a plain copy');
   assert.equal(JSON.stringify(h.data.local).includes('test-password-long'),false);
+  assert.equal(h.data.session.credential.apiKey,'fixture-secret');
   delete h.data.session.credential;
   assert.equal((await h.send({type:'GET_SETTINGS'})).hasKey,false);
   await assert.rejects(h.send({type:'UNLOCK_KEY',password:'wrong-password'}),/解锁失败/);
   await h.send({type:'UNLOCK_KEY',password:'test-password-long'});
   assert.equal(h.data.session.credential.apiKey,'fixture-secret');
   await h.send({type:'SAVE_SETTINGS',settings:{...settings,provider:'custom',apiBaseUrl:'https://different.test/v1'}});
-  assert.equal(h.data.session.credential,undefined);assert.equal(h.data.local.vault,undefined);
+  assert.equal(h.data.session.credential,undefined);assert.equal(h.data.local.vault,undefined);assert.equal(h.data.local.credential,undefined);
+});
+
+test('a plain saved key can be upgraded to the encrypted vault, and clearing removes every copy',async()=>{
+  const h=harness();
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},apiKey:'fixture-secret',consent:true});
+  await assert.rejects(h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},rememberKey:true,password:'short'}),/12 位/);
+  assert.equal(h.data.local.credential.apiKey,'fixture-secret','a failed upgrade must not drop the saved key');
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},rememberKey:true,password:'test-password-long'});
+  assert.equal(h.data.local.credential,undefined);assert.ok(h.data.local.vault);
+  assert.equal(h.data.session.credential.apiKey,'fixture-secret');
+  assert.equal((await h.send({type:'GET_SETTINGS'})).hasVault,true);
+  await h.send({type:'CLEAR_KEY'});
+  assert.deepEqual([h.data.local.credential,h.data.local.vault,h.data.session.credential],[undefined,undefined,undefined]);
+  await assert.rejects(h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},rememberKey:true,password:'test-password-long'}),/请填写/);
 });
 
 test('remote insecure endpoints, URL credentials and unsupported schemes are rejected',async()=>{

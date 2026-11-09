@@ -24,10 +24,17 @@ function jobKey(sender, taskId) {
 function cancelJobs(tabId) {
   for (const [key, job] of jobs) if (tabId == null || job.tabId === tabId) { job.controller.abort(); jobs.delete(key); }
 }
+// Keys saved without a password persist in local storage (never synced, trusted
+// contexts only). Password-protected keys live only in the encrypted vault and,
+// once unlocked, in session storage.
+async function storedCredential(endpoint) {
+  const [{credential:local}, {credential:session}] = await Promise.all([chrome.storage.local.get('credential'), chrome.storage.session.get('credential')]);
+  return [local, session].find(credential => credential?.endpoint === endpoint)?.apiKey || '';
+}
 async function credentials(settings) {
-  const {credential} = await chrome.storage.session.get('credential');
-  if (!credential || credential.endpoint !== settings.apiBaseUrl) throw new Error('请在设置中输入或解锁此接口的 API Key');
-  return credential.apiKey;
+  const apiKey = await storedCredential(settings.apiBaseUrl);
+  if (!apiKey) throw new Error('请在设置中输入或解锁此接口的 API Key');
+  return apiKey;
 }
 async function assertRemoteAllowed(settings) {
   const {consents = {}} = await chrome.storage.local.get('consents');
@@ -40,10 +47,10 @@ async function configForRequest(settings) {
 }
 async function settingsView() {
   const settings = await preferences();
-  const [{vault, siteRules = {}, consents = {}}, {credential}] = await Promise.all([
-    chrome.storage.local.get(['vault','siteRules','consents']), chrome.storage.session.get('credential'),
+  const [{vault, siteRules = {}, consents = {}}, apiKey] = await Promise.all([
+    chrome.storage.local.get(['vault','siteRules','consents']), storedCredential(settings.apiBaseUrl),
   ]);
-  return {settings, siteRules, hasKey:!!credential && credential.endpoint === settings.apiBaseUrl,
+  return {settings, siteRules, hasKey:!!apiKey,
     hasVault:!!vault && vault.endpoint === settings.apiBaseUrl, destination:LT_CONFIG.destination(settings), consent:!!consents[LT_CONFIG.consentKey(settings)]};
 }
 async function saveSettings(message) {
@@ -52,18 +59,20 @@ async function saveSettings(message) {
   const apiKey = message.apiKey?.trim();
   if (apiKey && (apiKey.length > 2000 || /\s/.test(apiKey))) throw new Error('API Key 格式无效');
   if (settings.service === 'openai' && !await chrome.permissions.contains({origins:[LT_CONFIG.originPattern(settings.apiBaseUrl)]})) throw new Error('请先授权访问所选接口');
+  const previous = await preferences();
+  // Ticking "encrypt with password" without retyping the key upgrades the key already saved for this endpoint.
+  const key = apiKey || (settings.apiBaseUrl === previous.apiBaseUrl ? await storedCredential(settings.apiBaseUrl) : '');
   let vault;
   if (message.rememberKey) {
-    if (!apiKey) throw new Error('请填写要加密保存的 API Key');
-    vault = await LT_VAULT.seal(apiKey, message.password, settings.apiBaseUrl);
+    if (!key) throw new Error('请填写要加密保存的 API Key');
+    vault = await LT_VAULT.seal(key, message.password, settings.apiBaseUrl);
   }
   cancelJobs(); translationCache.clear(); inFlightTranslations.clear();
-  const previous = await preferences();
-  if (previous.apiBaseUrl !== settings.apiBaseUrl || apiKey) {
-    await chrome.storage.session.remove('credential'); await chrome.storage.local.remove('vault');
+  if (previous.apiBaseUrl !== settings.apiBaseUrl || apiKey || vault) {
+    await chrome.storage.session.remove('credential'); await chrome.storage.local.remove(['credential','vault']);
   }
-  if (apiKey) await chrome.storage.session.set({credential:{apiKey, endpoint:settings.apiBaseUrl}});
-  if (vault) await chrome.storage.local.set({vault});
+  if (vault) { await chrome.storage.local.set({vault}); await chrome.storage.session.set({credential:{apiKey:key, endpoint:settings.apiBaseUrl}}); }
+  else if (apiKey) await chrome.storage.local.set({credential:{apiKey, endpoint:settings.apiBaseUrl}});
   await chrome.storage.local.set({preferences:settings});
   if (message.consent === true) {
     const {consents = {}} = await chrome.storage.local.get('consents');
@@ -136,7 +145,7 @@ async function dispatch(message, sender) {
       });
       case 'CLEAR_KEY': return serialize(async () => {
         cancelJobs(); translationCache.clear(); inFlightTranslations.clear();
-        await chrome.storage.session.remove('credential'); await chrome.storage.local.remove('vault'); return settingsView();
+        await chrome.storage.session.remove('credential'); await chrome.storage.local.remove(['credential','vault']); return settingsView();
       });
       case 'CLEAR_CACHE': translationCache.clear(); return {};
       case 'TEST_CONNECTION': {

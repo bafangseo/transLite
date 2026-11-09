@@ -46,8 +46,41 @@ test('duplicate and overlapping requests share work; completed translations are 
 });
 
 test('malformed or mismatched model output is rejected instead of mapped to wrong paragraphs', async () => {
-  const h = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '["Only one result"]' } }] }) }));
-  await assert.rejects(() => h.translate(['Paragraph one', 'Paragraph two']), /格式|数量|JSON/);
+  const h = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '["Only one result", "Extra result"]' } }] }) }));
+  await assert.rejects(() => h.translate(['Single paragraph']), /格式|数量|JSON/);
+  const empty = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '[""]' } }] }) }));
+  await assert.rejects(() => empty.translate(['Single paragraph']), /格式|数量|JSON/);
+  const prose = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'Sure, here is the translation.' } }] }) }));
+  await assert.rejects(() => prose.translate(['Single paragraph']), /格式无效/);
+});
+
+test('a batch the model merges or drops is retried item by item in the original order', async () => {
+  const reply = content => ({ ok: true, json: async () => ({ choices: [{ message: { content } }] }) });
+  const h = harness(async ({ body }) => {
+    const texts = JSON.parse(body.messages[1].content);
+    if (texts.length > 1) return reply(JSON.stringify(['merged fragments', '', 'and']));
+    return reply(JSON.stringify([`译文：${texts[0]}`]));
+  });
+  const result = await h.translate(['Nemotron 3 Ultra', 'at 561B in May and June, and', 'Inkling', 'from Thinking Machines Lab.']);
+  assert.deepEqual(Array.from(result.translations), ['译文：Nemotron 3 Ultra', '译文：at 561B in May and June, and', '译文：Inkling', '译文：from Thinking Machines Lab.']);
+  assert.equal(h.calls.length, 5, 'one batch request followed by one request per item');
+  assert.equal(JSON.parse(h.calls[0].body.messages[1].content).length, 4);
+});
+
+test('code fences, object wrappers, numeric items and stray reasoning are recovered', async () => {
+  const cases = [
+    '```json\n["译文 A", "译文 B"]\n```',
+    '{"translations": ["译文 A", "译文 B"]}',
+    '<think>Let me translate.</think>\n["译文 A", "译文 B"]',
+    'Here you go: ["译文 A", "译文 B"] Hope this helps.',
+  ];
+  for (const content of cases) {
+    const h = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content } }] }) }));
+    assert.deepEqual(Array.from((await h.translate(['A', 'B'])).translations), ['译文 A', '译文 B'], content);
+    assert.equal(h.calls.length, 1, content);
+  }
+  const numeric = harness(async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '[209, "点赞"]' } }] }) }));
+  assert.deepEqual(Array.from((await numeric.translate(['209', 'Upvote'])).translations), ['209', '点赞']);
 });
 
 test('provider defaults and thinking-only / unrelated models do not receive a Qwen toggle', async () => {

@@ -28,7 +28,7 @@ function apply(result) {
   $('aggressive-mode').checked = s.aggressiveMode;
   $('api-key').value = ''; $('vault-password').value = ''; $('unlock-password').value = ''; $('remember-key').checked = false;
   $('api-key').placeholder = result.hasKey ? '已配置，留空保留当前密钥' : '输入 API Key';
-  $('key-status').textContent = result.hasKey ? (result.hasVault ? '本次会话已解锁，已保存加密副本。' : '密钥仅在本次浏览器会话有效，关闭浏览器后需重新输入。') : (result.hasVault ? '密钥已锁定，请解锁或输入新密钥。' : '默认仅本次浏览器会话保存，不会同步到其他设备。');
+  $('key-status').textContent = result.hasKey ? (result.hasVault ? '本次会话已解锁；密钥以加密形式保存在本机。' : '密钥已保存在本机，重启浏览器后无需重新输入。') : (result.hasVault ? '密钥已锁定，请解锁或输入新密钥。' : '密钥保存在本机，不会同步到其他设备。');
   $('unlock-fields').classList.toggle('hidden', !result.hasVault || result.hasKey);
   $('service-consent').checked = result.consent;
   $('site-rules').replaceChildren();

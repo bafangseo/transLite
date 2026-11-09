@@ -52,8 +52,10 @@ var LT_DOM = (() => {
       if (['inline', 'inline-block', 'inline-flex', 'inline-grid'].includes(style(el).display)) return true;
       for (let current = el; current && current !== document.body; current = current.parentElement) {
         const s = style(current);
-        if (s.whiteSpace === 'nowrap' || s.textOverflow === 'ellipsis' ||
-            ['hidden', 'clip'].includes(s.overflowY) || parseInt(s.webkitLineClamp, 10) > 0) return true;
+        if (s.whiteSpace === 'nowrap' || s.textOverflow === 'ellipsis' || parseInt(s.webkitLineClamp, 10) > 0) return true;
+        // Clipping only truncates text when the box is short. Tall article wrappers
+        // routinely use overflow:hidden/clip for layout (e.g. Tailwind overflow-clip).
+        if (['hidden', 'clip'].includes(s.overflowY) && (s.maxHeight !== 'none' || current.clientHeight < 160)) return true;
       }
       return false;
     }
