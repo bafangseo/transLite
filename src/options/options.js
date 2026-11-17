@@ -4,6 +4,7 @@ const value = name => document.querySelector(`input[name="${name}"]:checked`)?.v
 function check(name, selected) { for (const input of document.querySelectorAll(`input[name="${name}"]`)) input.checked = input.value === selected; }
 function collect() {
   return LT_CONFIG.sanitize({service:value('service'), provider:$('provider').value, apiBaseUrl:$('api-base-url').value,
+    deeplPlan:$('deepl-plan').value,
     model:$('model').value, thinkingMode:$('thinking-mode').value, systemPrompt:$('system-prompt').value,
     targetLang:$('target-lang').value, aggressiveMode:$('aggressive-mode').checked, theme:value('theme'),
     translationColorMode:value('translation-color-mode'), translationColor:$('translation-color').value,
@@ -11,7 +12,10 @@ function collect() {
 }
 function status(text, error = false) { $('save-status').textContent = text; $('save-status').style.opacity = '1'; $('save-status').style.color = error ? '#ffdfdf' : '#fff'; }
 function updateHint() {
-  $('openai-config').classList.toggle('hidden', value('service') !== 'openai');
+  const service = value('service');
+  $('key-config').classList.toggle('hidden', service === 'google');
+  $('openai-config').classList.toggle('hidden', service !== 'openai');
+  $('deepl-config').classList.toggle('hidden', service !== 'deepl');
   $('remember-fields').classList.toggle('hidden', !$('remember-key').checked);
   $('color-picker-wrap').classList.toggle('hidden', value('translation-color-mode') !== 'custom');
   $('color-hex-label').textContent = $('translation-color').value;
@@ -23,7 +27,7 @@ function updateHint() {
 function apply(result) {
   view = result;
   const s = result.settings;
-  for (const [id,key] of Object.entries({'provider':'provider','api-base-url':'apiBaseUrl','model':'model','thinking-mode':'thinkingMode','system-prompt':'systemPrompt','target-lang':'targetLang','translation-color':'translationColor','litellm-base-url':'litellmBaseUrl'})) $(id).value = s[key];
+  for (const [id,key] of Object.entries({'provider':'provider','api-base-url':'apiBaseUrl','deepl-plan':'deeplPlan','model':'model','thinking-mode':'thinkingMode','system-prompt':'systemPrompt','target-lang':'targetLang','translation-color':'translationColor','litellm-base-url':'litellmBaseUrl'})) $(id).value = s[key];
   check('service',s.service); check('theme',s.theme); check('translation-color-mode',s.translationColorMode);
   $('aggressive-mode').checked = s.aggressiveMode;
   $('api-key').value = ''; $('vault-password').value = ''; $('unlock-password').value = ''; $('remember-key').checked = false;
@@ -52,7 +56,7 @@ async function save(test = false) {
   const settings=collect();
   if (test && !$('service-consent').checked) throw new Error('请先确认待译文字的接收方');
   // Request permissions before any await, preserving the button's user gesture.
-  const origins=settings.service === 'openai' || test ? [LT_CONFIG.originPattern(LT_CONFIG.destination(settings))] : [];
+  const origins=settings.service !== 'google' || test ? [LT_CONFIG.originPattern(LT_CONFIG.destination(settings))] : [];
   const grant=origins.length ? chrome.permissions.request({origins}) : Promise.resolve(true);
   if (!await grant) throw new Error('未获得服务访问权限，设置未保存');
   const result=await LT_UI.request('SAVE_SETTINGS',{settings, apiKey:$('api-key').value, rememberKey:$('remember-key').checked, password:$('vault-password').value, consent:$('service-consent').checked});
@@ -79,8 +83,8 @@ function bind() {
   });
   for(const button of document.querySelectorAll('.preset-btn')) button.addEventListener('click',()=>{$('model').value=button.dataset.model;updateHint();});
   for(const input of document.querySelectorAll('input,select,textarea')) input.addEventListener('input',()=>{
-    if(['model','api-key','api-base-url','thinking-mode','target-lang','system-prompt'].includes(input.id)||input.name==='service') $('test-result').textContent='';
-    if(input.id==='api-base-url'||input.name==='service') $('service-consent').checked=false;
+    if(['model','api-key','api-base-url','deepl-plan','thinking-mode','target-lang','system-prompt'].includes(input.id)||input.name==='service') $('test-result').textContent='';
+    if(['api-base-url','deepl-plan'].includes(input.id)||input.name==='service') $('service-consent').checked=false;
     updateHint();
   });
   $('advanced-toggle').setAttribute('role','button'); $('advanced-toggle').setAttribute('aria-expanded','false'); $('advanced-toggle').tabIndex=0;

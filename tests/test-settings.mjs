@@ -125,3 +125,42 @@ test('transient HTTP errors retry with a bound, while authentication failures do
   await assert.rejects(bad.context.handleTranslation(['Bad key'],{service:'openai',apiKey:'bad'}),/401/);
   assert.equal(bad.calls.length,1);
 });
+
+test('DeepL keeps its own key slot, plan host and request shape', async () => {
+  const h = harness((url,options)=>({ok:true,json:async()=>({translations:[{detected_source_language:'EN',text:'示例译文'}]})}));
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},apiKey:'ai-secret',consent:true});
+  const deepl = await h.send({type:'SAVE_SETTINGS',settings:{service:'deepl'},apiKey:'deepl-secret:fx',consent:true});
+  assert.equal(deepl.destination,'https://api-free.deepl.com');
+  assert.equal(deepl.hasKey,true);
+  assert.equal(h.data.local.credential.apiKey,'ai-secret','switching to DeepL must not drop the AI key');
+  assert.equal(h.data.local.credentialDeepl.endpoint,'https://api-free.deepl.com');
+  assert.equal(JSON.stringify(h.data.local.preferences).includes('deepl-secret'),false);
+
+  const connection = await h.send({type:'TEST_CONNECTION'});
+  assert.equal(connection.translation,'示例译文');
+  assert.equal(h.calls[0].url,'https://api-free.deepl.com/v2/translate');
+  assert.equal(h.calls[0].options.headers.Authorization,'DeepL-Auth-Key deepl-secret:fx');
+  assert.equal(h.calls[0].options.headers['Content-Type'],'application/json');
+
+  const back = await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'}});
+  assert.equal(back.hasKey,true,'switching back finds the AI key again');
+
+  const pro = await h.send({type:'SAVE_SETTINGS',settings:{service:'deepl',deeplPlan:'pro'}});
+  assert.equal(pro.destination,'https://api.deepl.com');
+  assert.equal(pro.hasKey,false,'a free key is bound to api-free and is dropped when the host changes');
+});
+
+test('the DeepL key can be encrypted with the same vault flow', async () => {
+  const h = harness();
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'deepl'},apiKey:'deepl-secret:fx',rememberKey:true,password:'test-password-long',consent:true});
+  assert.equal(JSON.stringify(h.data.local).includes('deepl-secret'),false);
+  assert.ok(h.data.local.vaultDeepl);
+  assert.equal(h.data.session.credentialDeepl.apiKey,'deepl-secret:fx');
+  delete h.data.session.credentialDeepl;
+  const locked = await h.send({type:'GET_SETTINGS'});
+  assert.equal(locked.hasKey,false);assert.equal(locked.hasVault,true);
+  await h.send({type:'UNLOCK_KEY',password:'test-password-long'});
+  assert.equal(h.data.session.credentialDeepl.apiKey,'deepl-secret:fx');
+  await h.send({type:'CLEAR_KEY'});
+  assert.deepEqual([h.data.local.credentialDeepl,h.data.local.vaultDeepl,h.data.session.credentialDeepl],[undefined,undefined,undefined]);
+});

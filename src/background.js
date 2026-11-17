@@ -24,15 +24,21 @@ function jobKey(sender, taskId) {
 function cancelJobs(tabId) {
   for (const [key, job] of jobs) if (tabId == null || job.tabId === tabId) { job.controller.abort(); jobs.delete(key); }
 }
+// Each keyed service owns its own slot, so switching between the AI endpoint and
+// DeepL never destroys the other one's saved key.
+function credentialSlots(service) {
+  return service === 'deepl' ? {plain:'credentialDeepl', vault:'vaultDeepl'} : {plain:'credential', vault:'vault'};
+}
 // Keys saved without a password persist in local storage (never synced, trusted
 // contexts only). Password-protected keys live only in the encrypted vault and,
 // once unlocked, in session storage.
-async function storedCredential(endpoint) {
-  const [{credential:local}, {credential:session}] = await Promise.all([chrome.storage.local.get('credential'), chrome.storage.session.get('credential')]);
+async function storedCredential(settings) {
+  const endpoint = LT_CONFIG.credentialEndpoint(settings), slot = credentialSlots(settings.service);
+  const [{[slot.plain]:local}, {[slot.plain]:session}] = await Promise.all([chrome.storage.local.get(slot.plain), chrome.storage.session.get(slot.plain)]);
   return [local, session].find(credential => credential?.endpoint === endpoint)?.apiKey || '';
 }
 async function credentials(settings) {
-  const apiKey = await storedCredential(settings.apiBaseUrl);
+  const apiKey = await storedCredential(settings);
   if (!apiKey) throw new Error('请在设置中输入或解锁此接口的 API Key');
   return apiKey;
 }
@@ -43,36 +49,40 @@ async function assertRemoteAllowed(settings) {
 }
 async function configForRequest(settings) {
   await assertRemoteAllowed(settings);
-  return {...settings, ...(settings.service === 'openai' ? {apiKey:await credentials(settings)} : {})};
+  return {...settings, ...(settings.service === 'google' ? {} : {apiKey:await credentials(settings)})};
 }
 async function settingsView() {
-  const settings = await preferences();
-  const [{vault, siteRules = {}, consents = {}}, apiKey] = await Promise.all([
-    chrome.storage.local.get(['vault','siteRules','consents']), storedCredential(settings.apiBaseUrl),
+  const settings = await preferences(), slot = credentialSlots(settings.service);
+  const [{siteRules = {}, consents = {}, [slot.vault]:vault}, apiKey] = await Promise.all([
+    chrome.storage.local.get(['siteRules','consents',slot.vault]), storedCredential(settings),
   ]);
   return {settings, siteRules, hasKey:!!apiKey,
-    hasVault:!!vault && vault.endpoint === settings.apiBaseUrl, destination:LT_CONFIG.destination(settings), consent:!!consents[LT_CONFIG.consentKey(settings)]};
+    hasVault:!!vault && vault.endpoint === LT_CONFIG.credentialEndpoint(settings), destination:LT_CONFIG.destination(settings), consent:!!consents[LT_CONFIG.consentKey(settings)]};
 }
 async function saveSettings(message) {
   const settings = LT_CONFIG.sanitize(message.settings);
   if (message.apiKey != null && typeof message.apiKey !== 'string') throw new Error('API Key 格式无效');
   const apiKey = message.apiKey?.trim();
   if (apiKey && (apiKey.length > 2000 || /\s/.test(apiKey))) throw new Error('API Key 格式无效');
-  if (settings.service === 'openai' && !await chrome.permissions.contains({origins:[LT_CONFIG.originPattern(settings.apiBaseUrl)]})) throw new Error('请先授权访问所选接口');
+  if (settings.service !== 'google' && !await chrome.permissions.contains({origins:[LT_CONFIG.originPattern(LT_CONFIG.destination(settings))]})) throw new Error('请先授权访问所选接口');
   const previous = await preferences();
+  const slot = credentialSlots(settings.service), endpoint = LT_CONFIG.credentialEndpoint(settings);
   // Ticking "encrypt with password" without retyping the key upgrades the key already saved for this endpoint.
-  const key = apiKey || (settings.apiBaseUrl === previous.apiBaseUrl ? await storedCredential(settings.apiBaseUrl) : '');
+  const key = apiKey || (endpoint === LT_CONFIG.credentialEndpoint(previous) ? await storedCredential(settings) : '');
   let vault;
   if (message.rememberKey) {
     if (!key) throw new Error('请填写要加密保存的 API Key');
-    vault = await LT_VAULT.seal(key, message.password, settings.apiBaseUrl);
+    vault = await LT_VAULT.seal(key, message.password, endpoint);
   }
   cancelJobs(); translationCache.clear(); inFlightTranslations.clear();
-  if (previous.apiBaseUrl !== settings.apiBaseUrl || apiKey || vault) {
-    await chrome.storage.session.remove('credential'); await chrome.storage.local.remove(['credential','vault']);
+  // Another service's slot is left alone; only this slot is reset when its own
+  // endpoint changed or a new key replaces the old one.
+  const endpointChanged = credentialSlots(previous.service).plain === slot.plain && endpoint !== LT_CONFIG.credentialEndpoint(previous);
+  if (endpointChanged || apiKey || vault) {
+    await chrome.storage.session.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]);
   }
-  if (vault) { await chrome.storage.local.set({vault}); await chrome.storage.session.set({credential:{apiKey:key, endpoint:settings.apiBaseUrl}}); }
-  else if (apiKey) await chrome.storage.local.set({credential:{apiKey, endpoint:settings.apiBaseUrl}});
+  if (vault) { await chrome.storage.local.set({[slot.vault]:vault}); await chrome.storage.session.set({[slot.plain]:{apiKey:key, endpoint}}); }
+  else if (apiKey) await chrome.storage.local.set({[slot.plain]:{apiKey, endpoint}});
   await chrome.storage.local.set({preferences:settings});
   if (message.consent === true) {
     const {consents = {}} = await chrome.storage.local.get('consents');
@@ -138,14 +148,16 @@ async function dispatch(message, sender) {
       case 'GET_SETTINGS': return settingsView();
       case 'SAVE_SETTINGS': return serialize(() => saveSettings(message));
       case 'UNLOCK_KEY': return serialize(async () => {
-        const settings = await preferences(), {vault} = await chrome.storage.local.get('vault');
-        if (vault?.endpoint !== settings.apiBaseUrl) throw new Error('此接口没有已保存的密钥');
+        const settings = await preferences(), slot = credentialSlots(settings.service), endpoint = LT_CONFIG.credentialEndpoint(settings);
+        const {[slot.vault]:vault} = await chrome.storage.local.get(slot.vault);
+        if (vault?.endpoint !== endpoint) throw new Error('此接口没有已保存的密钥');
         const apiKey = await LT_VAULT.open(vault, message.password);
-        await chrome.storage.session.set({credential:{apiKey, endpoint:settings.apiBaseUrl}}); return settingsView();
+        await chrome.storage.session.set({[slot.plain]:{apiKey, endpoint}}); return settingsView();
       });
       case 'CLEAR_KEY': return serialize(async () => {
+        const slot = credentialSlots((await preferences()).service);
         cancelJobs(); translationCache.clear(); inFlightTranslations.clear();
-        await chrome.storage.session.remove('credential'); await chrome.storage.local.remove(['credential','vault']); return settingsView();
+        await chrome.storage.session.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]); return settingsView();
       });
       case 'CLEAR_CACHE': translationCache.clear(); return {};
       case 'TEST_CONNECTION': {
@@ -154,7 +166,9 @@ async function dispatch(message, sender) {
         try {
           const translations = settings.service === 'openai'
             ? await translateWithOpenAI(['Hello, welcome to this page.'], settings, {signal:controller.signal})
-            : await fetchGoogleBatch(['Hello, welcome to this page.'], settings.targetLang, {signal:controller.signal});
+            : settings.service === 'deepl'
+              ? await fetchDeeplBatch(['Hello, welcome to this page.'], settings, {signal:controller.signal})
+              : await fetchGoogleBatch(['Hello, welcome to this page.'], settings.targetLang, {signal:controller.signal});
           return {elapsed:Date.now()-start, translation:translations[0], destination:LT_CONFIG.destination(settings), policy:settings.service === 'openai' ? LT_MODEL_POLICY.describe(settings) : ''};
         } finally { jobs.delete(key); }
       }

@@ -69,14 +69,16 @@ async function handleTranslation(texts, settings = {}, context = {}) {
   if (missing.length) {
     // Split by both item count and payload size; a long article cannot create
     // one enormous URL or force every visible paragraph to wait for it.
-    const google = settings.service !== 'openai';
-    const jobs = missing.flatMap(item => splitSource(item.text, google ? 600 : 2400)
+    // Only the Google channel is limited by query-string length; DeepL and the
+    // chat API both take a JSON body, so one text can be much longer there.
+    const provider = ['openai', 'deepl'].includes(settings.service) ? settings.service : 'google';
+    const jobs = missing.flatMap(item => splitSource(item.text, provider === 'google' ? 600 : 2400)
       .map((text, part) => ({ item, text, part })));
     const batches = [];
     let batch = [], size = 0;
     for (const job of jobs) {
-      const cost = google ? encodeURIComponent(job.text).length + 50 : job.text.length;
-      if (batch.length && (batch.length >= 8 || size + cost > (google ? 5500 : 3600))) {
+      const cost = provider === 'google' ? encodeURIComponent(job.text).length + 50 : job.text.length;
+      if (batch.length && (batch.length >= 8 || size + cost > (provider === 'google' ? 5500 : 3600))) {
         batches.push(batch);
         batch = []; size = 0;
       }
@@ -88,9 +90,11 @@ async function handleTranslation(texts, settings = {}, context = {}) {
     for (const chunk of batches) {
       void (async () => {
         try {
-          const translations = google
-            ? await fetchGoogleBatch(chunk.map(job => job.text), settings.targetLang || 'zh-CN', context)
-            : await translateWithOpenAI(chunk.map(job => job.text), settings, context);
+          const translations = provider === 'openai'
+            ? await translateWithOpenAI(chunk.map(job => job.text), settings, context)
+            : provider === 'deepl'
+              ? await fetchDeeplBatch(chunk.map(job => job.text), settings, context)
+              : await fetchGoogleBatch(chunk.map(job => job.text), settings.targetLang || 'zh-CN', context);
           chunk.forEach((job, index) => {
             parts.get(job.item)[job.part] = translations[index];
             const left = remaining.get(job.item) - 1;
@@ -154,6 +158,7 @@ async function fetchJson(url, options = {}, context = {}) {
           }
           const detail = response.status === 429 ? '请求过于频繁，请稍后重试'
             : [401,403].includes(response.status) ? '请检查 API Key、服务地址和权限'
+            : response.status === 456 ? '本月翻译额度已用完，请检查账户配额或升级套餐'
             : response.status === 404 ? '请检查接口地址和模型名称'
             : response.status === 400 ? '模型或思考参数不受此接口支持，请在设置中测试连接' : '服务暂时不可用，请重试';
           throw new Error(`HTTP ${response.status}：${detail}`);
@@ -193,6 +198,25 @@ async function fetchGoogleBatch(chunk, targetLang, context = {}) {
   if (parts.length === chunk.length && parts.every(part => part.trim())) return parts.map(part => part.trim());
   // The same global limiter also bounds fallback requests.
   return Promise.all(chunk.map(async text => googleText(await fetchJson(googleUrl(text, targetLang), {}, context))));
+}
+
+// DeepL returns one entry per submitted text, in the same order, so neither a
+// separator marker nor a per-item retry is needed. The endpoint host already
+// encodes the plan (free keys only work on api-free.deepl.com).
+async function fetchDeeplBatch(chunk, settings, context = {}) {
+  if (!settings.apiKey) throw new Error('请先在设置中填写 DeepL API Key');
+  const data = await fetchJson(`${LT_CONFIG.destination(settings)}/v2/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `DeepL-Auth-Key ${settings.apiKey}` },
+    body: JSON.stringify({ text: chunk, target_lang: LT_CONFIG.deeplTarget(settings.targetLang || 'zh-CN') }),
+  }, context);
+  const list = data?.translations;
+  if (!Array.isArray(list) || list.length !== chunk.length) throw new Error('DeepL 返回的译文数量不匹配');
+  const texts = list.map(item => typeof item?.text === 'string' ? item.text.trim() : '');
+  // An empty entry means the batch was silently truncated: fail so the caller
+  // can report a partial result and let the user retry the rest.
+  if (texts.some(text => !text)) throw new Error('DeepL 返回了空译文');
+  return texts;
 }
 
 function thinkingOptions(settings) {
