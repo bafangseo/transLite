@@ -482,14 +482,28 @@ function isVisible(el) {
 
 // 提取元素纯文本，忽略已插入的译文（递归遍历避免 cloneNode 开销）
 // 跳过不可见/辅助元素：hidden、sr-only、popover tooltip、aria-hidden
+// 被 CSS 隐藏的子节点不算正文：Steam 的订阅按钮里三个状态选项只有一个可见，
+// 全算进来就会把「订阅 / 已订阅 / 取消订阅」当成一段话翻出去。
+function isHiddenByCss(node) {
+  try {
+    const style = window.getComputedStyle(node);
+    return style.display === 'none' || style.visibility === 'hidden';
+  } catch (_) {
+    return false;
+  }
+}
+
 function getCleanText(el) {
   let text = '';
+  // 子节点很多的大容器不做 computed style 检查，避免热点路径上反复触发布局。
+  const checkHidden = el.childElementCount <= 12;
   for (const node of el.childNodes) {
     if (node.nodeType === 3) {
       text += node.textContent;
     } else if (node.nodeType === 1 && !node.classList.contains(LT.RESULT_CLASS)) {
       // <br> 不产生文字，但要留个分隔，否则 "…exquisite." 和下一段会粘在一起发出去。
       if (node.tagName === 'BR') { text += ' '; continue; }
+      if (checkHidden && isHiddenByCss(node)) continue;
       if (shouldSkipInvisibleNode(node)) continue;
       if (node.hasAttribute(LT.DONE_ATTR)) continue;
       text += getCleanText(node);
@@ -659,21 +673,6 @@ function unitIsCurrent(unit) {
   return LT_DOM.isCurrent(unit);
 }
 
-// 只有「独立的块级容器」才适合追加一段译文；其余位置改为放弃，宁可少翻也不破坏排版。
-function canAppendBlock(el) {
-  try {
-    if (el.closest('a[href], button, label, summary, [role="link"], [role="button"], [role="tab"], [role="menuitem"]')) return false;
-    const own = window.getComputedStyle(el);
-    if (/^inline/.test(own.display)) return false;
-    // 元素自己就是 flex/grid 容器时，追加的子节点会变成新的 flex item，同样会挤歪布局。
-    if (/flex|grid/.test(own.display)) return false;
-    if (own.float !== 'none' || own.position === 'absolute' || own.position === 'fixed') return false;
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
 function applyTranslation(unit, translation, adapter) {
   state.queuedUnits.delete(unit);
   state.pendingUnits.delete(unit.node || unit.sources?.[0]?.node || unit.el);
@@ -687,7 +686,7 @@ function applyTranslation(unit, translation, adapter) {
       if (translation.trim() === unit.text.trim()) return;
       // 但只在真正的「块」上追加：链接/按钮里、行内元素、以及 flex/grid 容器里追加块
       // 都会多出一个盒，把导航栏这类横向布局顶歪（Steam 工坊内页的导航栏就是这样被撑开的）。
-      if (!canAppendBlock(unit.el)) { unit.el.setAttribute(LT.DONE_ATTR, ''); return; }
+      if (!LT_DOM.canAppendBlock(unit.el)) { unit.el.setAttribute(LT.DONE_ATTR, ''); return; }
       const span = document.createElement('span');
       span.className = LT.RESULT_CLASS;
       span.textContent = translation;
