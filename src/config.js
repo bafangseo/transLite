@@ -45,7 +45,7 @@ const LT_CONFIG = (() => {
     return result;
   }
   function publicSettings(settings) {
-    return Object.fromEntries(['service','targetLang','aggressiveMode','theme','translationColorMode','translationColor','litellmBaseUrl'].map(key => [key, settings[key]]));
+    return Object.fromEntries(['service','targetLang','aggressiveMode','floatingButton','theme','translationColorMode','translationColor','litellmBaseUrl'].map(key => [key, settings[key]]));
   }
   function originPattern(value) {
     const url = new URL(value);

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 
 function harness(responder) {
-  const data={local:{},sync:{},session:{}}, levels={}, sent=[], calls=[];
+  const data={local:{},sync:{},session:{}}, levels={}, sent=[], calls=[], opened=[], scripts={};
   const event={addListener(){}};
   const area=name=>({
     async setAccessLevel(value){levels[name]=value.accessLevel;},
@@ -15,9 +15,15 @@ function harness(responder) {
   });
   const context=vm.createContext({console,URL,DOMException,AbortController,AbortSignal,setTimeout,clearTimeout,TextEncoder,TextDecoder,crypto:webcrypto,btoa,atob,
     importScripts(...files){for(const file of files)vm.runInContext(fs.readFileSync(new URL(`../src/${file}`,import.meta.url),'utf8'),context);},
-    chrome:{runtime:{id:'fixture',getURL:path=>`chrome-extension://fixture/${path}`,onMessage:event,onInstalled:event,onStartup:event},
+    chrome:{runtime:{id:'fixture',getURL:path=>`chrome-extension://fixture/${path}`,onMessage:event,onInstalled:event,onStartup:event,openOptionsPage:async()=>{opened.push(true);},getManifest:()=>({})},
       storage:{local:area('local'),sync:area('sync'),session:area('session')},
-      permissions:{contains:async()=>true,onRemoved:event},commands:{onCommand:event},contextMenus:{onClicked:event},
+      scripting:{
+        getRegisteredContentScripts:async({ids=[]}={})=>(scripts.registered||[]).filter(item=>!ids.length||ids.includes(item.id)),
+        registerContentScripts:async list=>{scripts.registered=[...(scripts.registered||[]),...structuredClone(list)];},
+        updateContentScripts:async list=>{scripts.registered=(scripts.registered||[]).map(item=>structuredClone(list.find(next=>next.id===item.id)||item));},
+        unregisterContentScripts:async({ids=[]}={})=>{scripts.registered=(scripts.registered||[]).filter(item=>!ids.includes(item.id));},
+      },
+      permissions:{contains:async()=>true,request:async()=>true,onRemoved:event,onAdded:event},commands:{onCommand:event},contextMenus:{onClicked:event},
       tabs:{onRemoved:event,onUpdated:event,query:async()=>[{id:1,url:'https://page.test/'}],sendMessage:async(id,message)=>sent.push(message)},
       action:{setBadgeText:async()=>{},setTitle:async()=>{}},
     },
@@ -26,7 +32,7 @@ function harness(responder) {
   vm.runInContext(fs.readFileSync(new URL('../src/background.js',import.meta.url),'utf8'),context);
   const ui={id:'fixture',url:'chrome-extension://fixture/options/options.html'};
   const page={id:'fixture',url:'https://page.test/',tab:{id:1},frameId:0,documentId:'doc'};
-  return {data,levels,sent,calls,context,ui,page,send:(message,sender=ui)=>context.dispatch(message,sender)};
+  return {data,levels,sent,calls,opened,scripts,context,ui,page,send:(message,sender=ui)=>context.dispatch(message,sender)};
 }
 
 test('only trusted extension UI can configure credentials; page settings and messages contain no secrets',async()=>{
@@ -163,4 +169,35 @@ test('the DeepL key can be encrypted with the same vault flow', async () => {
   assert.equal(h.data.session.credentialDeepl.apiKey,'deepl-secret:fx');
   await h.send({type:'CLEAR_KEY'});
   assert.deepEqual([h.data.local.credentialDeepl,h.data.local.vaultDeepl,h.data.session.credentialDeepl],[undefined,undefined,undefined]);
+});
+
+test('the floating entry asks the background to open options, and only from a real page', async () => {
+  const h=harness();
+  await h.send({type:'OPEN_SETTINGS'},h.page);
+  assert.equal(h.opened.length,1);
+  await assert.rejects(h.send({type:'OPEN_SETTINGS'},{...h.page,tab:undefined}),/无权/);
+  await assert.rejects(h.send({type:'OPEN_SETTINGS'},{...h.page,url:'chrome-extension://fixture/x.html'}),/无权/);
+});
+
+test('the floating entry injects only button.js, is on by default and can be switched off', async () => {
+  const h=harness(), fab=()=>(h.scripts.registered||[]).find(item=>item.id==='lt-fab');
+  assert.equal((await h.send({type:'GET_SETTINGS'})).settings.floatingButton,true);
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},consent:true});
+  assert.deepEqual(fab().js,['button.js'],'the all-site script carries the button only, never the translation bundle');
+  assert.deepEqual([...fab().matches].sort(),['http://*/*','https://*/*']);
+  assert.equal(fab().runAt,'document_idle');
+  assert.equal((await h.send({type:'GET_PAGE_SETTINGS'},h.page)).settings.floatingButton,true,'the page learns whether to render it');
+
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai',floatingButton:false}});
+  assert.equal(fab(),undefined,'switching it off removes the injection');
+  assert.equal((await h.send({type:'GET_PAGE_SETTINGS'},h.page)).settings.floatingButton,false);
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai',floatingButton:true}});
+  assert.ok(fab(),'switching it back on registers again');
+});
+
+test('the all-sites build relies on the manifest injection instead of registering it twice', async () => {
+  const h=harness(), fab=()=>(h.scripts.registered||[]).find(item=>item.id==='lt-fab');
+  h.context.chrome.runtime.getManifest=()=>({content_scripts:[{matches:['http://*/*'],js:['button.js']}]});
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},consent:true});
+  assert.equal(fab(),undefined,'button.js already ships in manifest content_scripts');
 });

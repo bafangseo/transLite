@@ -6,7 +6,7 @@ function collect() {
   return LT_CONFIG.sanitize({service:value('service'), provider:$('provider').value, apiBaseUrl:$('api-base-url').value,
     deeplPlan:$('deepl-plan').value,
     model:$('model').value, thinkingMode:$('thinking-mode').value, systemPrompt:$('system-prompt').value,
-    targetLang:$('target-lang').value, aggressiveMode:$('aggressive-mode').checked, theme:value('theme'),
+    targetLang:$('target-lang').value, aggressiveMode:$('aggressive-mode').checked, floatingButton:$('floating-button').checked, theme:value('theme'),
     translationColorMode:value('translation-color-mode'), translationColor:$('translation-color').value,
     litellmBaseUrl:$('litellm-base-url').value});
 }
@@ -30,6 +30,7 @@ function apply(result) {
   for (const [id,key] of Object.entries({'provider':'provider','api-base-url':'apiBaseUrl','deepl-plan':'deeplPlan','model':'model','thinking-mode':'thinkingMode','system-prompt':'systemPrompt','target-lang':'targetLang','translation-color':'translationColor','litellm-base-url':'litellmBaseUrl'})) $(id).value = s[key];
   check('service',s.service); check('theme',s.theme); check('translation-color-mode',s.translationColorMode);
   $('aggressive-mode').checked = s.aggressiveMode;
+  $('floating-button').checked = s.floatingButton !== false;
   $('api-key').value = ''; $('vault-password').value = ''; $('unlock-password').value = ''; $('remember-key').checked = false;
   $('api-key').placeholder = result.hasKey ? '已配置，留空保留当前密钥' : '输入 API Key';
   $('key-status').textContent = result.hasKey ? (result.hasVault ? '本次会话已解锁；密钥以加密形式保存在本机。' : '密钥已保存在本机，重启浏览器后无需重新输入。') : (result.hasVault ? '密钥已锁定，请解锁或输入新密钥。' : '密钥保存在本机，不会同步到其他设备。');
@@ -76,6 +77,15 @@ function bind() {
   $('btn-reset').addEventListener('click',()=>{apply({...view,settings:{...LT_DEFAULTS},hasKey:false,hasVault:false,consent:false});status('已填写默认值，保存后生效');});
   $('btn-shortcuts').addEventListener('click',()=>chrome.tabs.create({url:'chrome://extensions/shortcuts'}));
   document.querySelector('.toggle-password').addEventListener('click',()=>{$('api-key').type=$('api-key').type==='password'?'text':'password';});
+  // 悬浮入口要覆盖所有站点，勾选时立刻索要权限；拒绝就退回关闭状态。
+  $('floating-button').addEventListener('change',async()=>{
+    if(!$('floating-button').checked)return;
+    // 必须在第一个 await 之前发起，Chrome 只在用户手势窗口内接受授权请求。
+    // 全站授权版里这项权限已经是必需的，request 会直接返回 true，不会弹窗。
+    const granted=await chrome.permissions.request({origins:['http://*/*','https://*/*']}).catch(()=>false);
+    if(!granted){$('floating-button').checked=false;status('未获得网站访问权限，悬浮入口保持关闭',true);}
+    else status('已授权访问所有网站，保存后生效');
+  });
   $('provider').addEventListener('change',()=>{
     const preset=LT_CONFIG.presets[$('provider').value];
     if(preset.apiBaseUrl) {$('api-base-url').value=preset.apiBaseUrl;$('model').value=preset.model;}

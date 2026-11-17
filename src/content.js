@@ -145,7 +145,7 @@ const EXCLUDE_PARENTS = [
   '.lt-result', '[data-lt-done]',
   '[contenteditable]:not([contenteditable="false"])', 'input', 'textarea', 'select',
   '[translate="no"]', '.notranslate', '[hidden]', '[aria-hidden="true"]',
-  '#lt-selection-popup', '#lt-error-toast',
+  '#lt-selection-popup', '#lt-error-toast', '#lt-settings-fab',
 ].join(',');
 
 let state = {
@@ -218,7 +218,7 @@ function scheduleRescan() {
 
 function isExtensionNode(node) {
   const el = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-  return !!el?.closest?.(`.${LT.RESULT_CLASS}, #${LT.POPUP_ID}, #lt-error-toast`);
+  return !!el?.closest?.(`.${LT.RESULT_CLASS}, #${LT.POPUP_ID}, #lt-error-toast, #lt-settings-fab`);
 }
 
 function hasExternalMutation(mutation) {

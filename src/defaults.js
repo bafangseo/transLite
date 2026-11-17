@@ -9,6 +9,7 @@ var LT_DEFAULTS = {
   thinkingMode: 'off',
   targetLang: 'zh-CN',
   aggressiveMode: false,
+  floatingButton: true,
   theme: 'underline',
   translationColorMode: 'inherit',
   translationColor: '#1a73e8',

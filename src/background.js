@@ -2,7 +2,7 @@ importScripts('defaults.js', 'config.js', 'vault.js', 'model-policy.js', 'transl
 
 const ready = Promise.all(['local', 'sync', 'session'].map(area => chrome.storage[area].setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'})));
 const jobs = new Map(), injections = new Map();
-const files = ['defaults.js','adapters/litellm.js','adapters/linear.js','dom.js','content.js'];
+const files = ['defaults.js','adapters/litellm.js','adapters/linear.js','dom.js','content.js','button.js'];
 let writes = Promise.resolve();
 function serialize(action) { const next = writes.then(action); writes = next.catch(() => {}); return next; }
 async function preferences() {
@@ -88,6 +88,7 @@ async function saveSettings(message) {
     const {consents = {}} = await chrome.storage.local.get('consents');
     consents[LT_CONFIG.consentKey(settings)] = true; await chrome.storage.local.set({consents});
   }
+  await syncFloatingButton();
   await broadcastSettings();
   return settingsView();
 }
@@ -121,6 +122,24 @@ async function syncSiteScripts() {
   if (!allowed.length) { if (registered.length) await chrome.scripting.unregisterContentScripts({ids:['lt-auto']}); return; }
   const script = {id:'lt-auto', matches:allowed, js:files, css:['content.css'], runAt:'document_idle', persistAcrossSessions:true};
   if (registered.length) await chrome.scripting.updateContentScripts([script]); else await chrome.scripting.registerContentScripts([script]);
+}
+// 页面右侧的悬浮设置入口。没有扩展工具栏的浏览器（Steam 内嵌 CEF 等）只能靠它进设置页，
+// 所以这里用运行时注册的独立小脚本，而不是给每个页面注入整套翻译逻辑。
+async function syncFloatingButton() {
+  const registered = await chrome.scripting.getRegisteredContentScripts({ids:['lt-fab']});
+  // 「全站授权版」把 button.js 写进了 manifest 的 content_scripts，浏览器自己会注入，不用再注册。
+  const viaManifest = (chrome.runtime.getManifest?.().content_scripts || []).some(item => (item.js || []).includes('button.js'));
+  const {floatingButton} = await preferences();
+  const granted = !viaManifest && floatingButton && await chrome.permissions.contains({origins:['http://*/*','https://*/*']});
+  if (!granted) {
+    if (registered.length) await chrome.scripting.unregisterContentScripts({ids:['lt-fab']});
+    return;
+  }
+  const script = {id:'lt-fab', matches:['http://*/*','https://*/*'], js:['button.js'], runAt:'document_idle', persistAcrossSessions:true};
+  // 权限可能只授了一部分站点，这时注册会失败，按未启用处理即可。
+  try {
+    if (registered.length) await chrome.scripting.updateContentScripts([script]); else await chrome.scripting.registerContentScripts([script]);
+  } catch { if (registered.length) await chrome.scripting.unregisterContentScripts({ids:['lt-fab']}).catch(() => {}); }
 }
 async function setSiteRule(tabId, rule) {
   if (!['manual','always','never'].includes(rule)) throw new Error('网站选项无效');
@@ -198,6 +217,9 @@ async function dispatch(message, sender) {
   if (!pageSender(sender)) throw new Error('此页面无权执行该操作');
   switch (message.type) {
     case 'GET_PAGE_SETTINGS': return {settings:await pageSettings(sender.url)};
+    case 'OPEN_SETTINGS':
+      // 悬浮按钮的落地动作：内容脚本没有 openOptionsPage，只能由后台代劳。
+      await chrome.runtime.openOptionsPage(); return {};
     case 'BEGIN_TASK': {
       const key = jobKey(sender, message.taskId), settings = await configForRequest(await preferences());
       for (const [id, job] of jobs) if (Date.now()-job.time > 120000) {job.controller.abort(); jobs.delete(id);}
@@ -244,10 +266,12 @@ chrome.commands.onCommand.addListener(async command => { if (command === 'toggle
 chrome.contextMenus.onClicked.addListener((info, tab) => { if (info.menuItemId === 'lt-translate-selection' && info.selectionText) void shortcut(tab, info.selectionText); });
 chrome.runtime.onInstalled.addListener(async () => {
   await ready; await chrome.contextMenus.removeAll();
-  chrome.contextMenus.create({id:'lt-translate-selection', title:'翻译选中文字', contexts:['selection'], documentUrlPatterns:['http://*/*','https://*/*']}); await syncSiteScripts();
+  chrome.contextMenus.create({id:'lt-translate-selection', title:'翻译选中文字', contexts:['selection'], documentUrlPatterns:['http://*/*','https://*/*']});
+  await syncSiteScripts(); await syncFloatingButton();
 });
-chrome.runtime.onStartup.addListener(() => {void ready.then(syncSiteScripts);});
-chrome.permissions.onRemoved.addListener(() => {cancelJobs(); void syncSiteScripts();});
+chrome.runtime.onStartup.addListener(() => {void ready.then(() => Promise.all([syncSiteScripts(), syncFloatingButton()]));});
+chrome.permissions.onRemoved.addListener(() => {cancelJobs(); void syncSiteScripts(); void syncFloatingButton();});
+chrome.permissions.onAdded.addListener(() => {void syncFloatingButton();});
 chrome.tabs.onRemoved.addListener(tabId => {cancelJobs(tabId); void chrome.storage.session.remove(`ltStatus_${tabId}`);});
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') {
