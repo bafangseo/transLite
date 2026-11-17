@@ -76,6 +76,8 @@ if "--all-sites" in sys.argv[1:]:
     # Steam 的 CEF 内核通常更老，靠后台 executeScript 注入会静默失败。
     variant["content_scripts"] = [{
         "matches": ["http://*/*", "https://*/*"],
+        # Steam 客户端自己的界面页（steamloopback.host）不注入。
+        "exclude_matches": ["*://steamloopback.host/*"],
         "js": ["defaults.js", "adapters/litellm.js", "adapters/linear.js", "adapters/steam.js", "dom.js", "content.js", "button.js"],
         "css": ["content.css"],
         "run_at": "document_idle",

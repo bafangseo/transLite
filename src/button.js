@@ -172,7 +172,7 @@
       if ((chrome.runtime.getManifest?.().content_scripts || []).some(item => (item.js || []).includes('button.js'))) return true;
     } catch (_) {}
     // 用 globalThis，避免在没有 navigator 的测试环境里直接抛 ReferenceError。
-  return /steam|valve/i.test(globalThis.navigator?.userAgent || '');
+  return (globalThis.navigator?.userAgent || '').includes('Valve Steam');
   }
 
   // 已经是目标语言的页面直接跳过，中文页不要自动翻译。
@@ -187,6 +187,8 @@
   }
 
   async function start() {
+    // Steam 客户端自己的界面页不出按钮。
+    if (/(^|\.)steamloopback\.host$/i.test(globalThis.location?.hostname || '')) return;
     let settings = null;
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_PAGE_SETTINGS' });
