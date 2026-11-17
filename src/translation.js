@@ -7,6 +7,8 @@ let activeRequests = 0;
 const requestQueue = [];
 
 function canceled() { return new DOMException('翻译已停止', 'AbortError'); }
+// AbortSignal.throwIfAborted 是 Chromium 100+ 才有，老内核上手写同样的语义。
+function assertActive(signal) { if (signal?.aborted) throw canceled(); }
 function waitDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(canceled());
@@ -17,7 +19,7 @@ function waitDelay(ms, signal) {
   });
 }
 async function withRequestSlot(task, signal) {
-  signal?.throwIfAborted();
+  assertActive(signal);
   if (activeRequests >= 3) {
     if (requestQueue.length >= 48) throw new Error('翻译任务较多，请稍后重试');
     await new Promise((resolve, reject) => {
@@ -27,7 +29,7 @@ async function withRequestSlot(task, signal) {
       signal?.addEventListener('abort', abort, {once:true});
     });
   } else activeRequests++;
-  try { signal?.throwIfAborted(); return await task(); }
+  try { assertActive(signal); return await task(); }
   finally { const next = requestQueue.shift(); if (next) next.run(); else activeRequests--; }
 }
 
@@ -41,7 +43,7 @@ function cacheNamespace(settings) {
 }
 
 async function handleTranslation(texts, settings = {}, context = {}) {
-  context.signal?.throwIfAborted();
+  assertActive(context.signal);
   if (!Array.isArray(texts) || texts.length > 32 || texts.some(text => typeof text !== 'string' || text.length > 12000) || texts.reduce((n, text) => n + text.length, 0) > 60000) {
     throw new Error('翻译内容必须是字符串数组');
   }
@@ -100,7 +102,7 @@ async function handleTranslation(texts, settings = {}, context = {}) {
             const left = remaining.get(job.item) - 1;
             remaining.set(job.item, left);
             if (left !== 0) return;
-            context.signal?.throwIfAborted();
+            assertActive(context.signal);
             const translated = parts.get(job.item).join('\n');
             if (job.item.key.length <= 12000 && translated.length <= 12000) {
               translationCache.set(job.item.key, { text: translated, time: Date.now() });
@@ -141,7 +143,7 @@ function splitSource(text, limit) {
 async function fetchJson(url, options = {}, context = {}) {
   const signal = context.signal;
   for (let attempt = 0; ; attempt++) {
-    signal?.throwIfAborted();
+    assertActive(signal);
     const result = await withRequestSlot(async () => {
       const controller = new AbortController();
       const abort = () => controller.abort();

@@ -1,8 +1,34 @@
-importScripts('defaults.js', 'config.js', 'vault.js', 'model-policy.js', 'translation.js');
+// 顶层包一层：某个被导入的文件在老内核上解析失败时，Service Worker 会整体注册失败，
+// 浏览器只丢一句 "Service worker registration failed"，所以先把原因落到存储里。
+try {
+  importScripts('defaults.js', 'config.js', 'vault.js', 'model-policy.js', 'translation.js');
+} catch (error) {
+  try { chrome.storage.local.set({ltBootError: `importScripts 失败：${error?.message || error}`}); } catch (_) {}
+  throw error;
+}
 
-const ready = Promise.all(['local', 'sync', 'session'].map(area => chrome.storage[area].setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'})));
+// 老内核兼容：CEF 类浏览器（Steam 内置浏览器等）常常既没有 storage.session.setAccessLevel，
+// 也可能整个 storage.session 都不存在。缺什么补什么，Chrome 120 上行为完全不变。
+function memorySession() {
+  const data = new Map();
+  const read = keys => (Array.isArray(keys) ? keys : [keys]).filter(key => data.has(key)).map(key => [key, data.get(key)]);
+  return {
+    async get(keys) { return Object.fromEntries(read(keys)); },
+    async set(values) { for (const [key, value] of Object.entries(values)) data.set(key, value); },
+    async remove(keys) { for (const key of (Array.isArray(keys) ? keys : [keys])) data.delete(key); },
+    async clear() { data.clear(); },
+  };
+}
+const SESSION = chrome.storage.session || memorySession();
+// crypto.randomUUID 同样是 Chromium 92+ 才有。
+const newId = () => crypto.randomUUID?.() || `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+// setAccessLevel 是 Chrome 102 才有的，老内核上直接跳过：此时扩展存储默认就只对扩展自身可见。
+const ready = Promise.all(['local', 'sync', 'session']
+  .map(name => chrome.storage[name])
+  .filter(area => typeof area?.setAccessLevel === 'function')
+  .map(area => area.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'})));
 const jobs = new Map(), injections = new Map();
-const files = ['defaults.js','adapters/litellm.js','adapters/linear.js','dom.js','content.js','button.js'];
+const files = ['defaults.js','adapters/litellm.js','adapters/linear.js','adapters/steam.js','dom.js','content.js','button.js'];
 let writes = Promise.resolve();
 function serialize(action) { const next = writes.then(action); writes = next.catch(() => {}); return next; }
 async function preferences() {
@@ -34,7 +60,7 @@ function credentialSlots(service) {
 // once unlocked, in session storage.
 async function storedCredential(settings) {
   const endpoint = LT_CONFIG.credentialEndpoint(settings), slot = credentialSlots(settings.service);
-  const [{[slot.plain]:local}, {[slot.plain]:session}] = await Promise.all([chrome.storage.local.get(slot.plain), chrome.storage.session.get(slot.plain)]);
+  const [{[slot.plain]:local}, {[slot.plain]:session}] = await Promise.all([chrome.storage.local.get(slot.plain), SESSION.get(slot.plain)]);
   return [local, session].find(credential => credential?.endpoint === endpoint)?.apiKey || '';
 }
 async function credentials(settings) {
@@ -79,9 +105,9 @@ async function saveSettings(message) {
   // endpoint changed or a new key replaces the old one.
   const endpointChanged = credentialSlots(previous.service).plain === slot.plain && endpoint !== LT_CONFIG.credentialEndpoint(previous);
   if (endpointChanged || apiKey || vault) {
-    await chrome.storage.session.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]);
+    await SESSION.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]);
   }
-  if (vault) { await chrome.storage.local.set({[slot.vault]:vault}); await chrome.storage.session.set({[slot.plain]:{apiKey:key, endpoint}}); }
+  if (vault) { await chrome.storage.local.set({[slot.vault]:vault}); await SESSION.set({[slot.plain]:{apiKey:key, endpoint}}); }
   else if (apiKey) await chrome.storage.local.set({[slot.plain]:{apiKey, endpoint}});
   await chrome.storage.local.set({preferences:settings});
   if (message.consent === true) {
@@ -114,6 +140,8 @@ async function ensurePage(tabId) {
   try { await promise; } finally { injections.delete(tabId); }
 }
 async function syncSiteScripts() {
+  // 老内核没有运行时注册 API（Chrome 96+），此时只能靠手动翻译注入。
+  if (!chrome.scripting?.registerContentScripts) return;
   const {siteRules = {}} = await chrome.storage.local.get('siteRules');
   const matches = [...new Set(Object.entries(siteRules).filter(([,rule]) => rule === 'always').map(([origin]) => LT_CONFIG.originPattern(origin)))];
   const allowed = [];
@@ -126,6 +154,7 @@ async function syncSiteScripts() {
 // 页面右侧的悬浮设置入口。没有扩展工具栏的浏览器（Steam 内嵌 CEF 等）只能靠它进设置页，
 // 所以这里用运行时注册的独立小脚本，而不是给每个页面注入整套翻译逻辑。
 async function syncFloatingButton() {
+  if (!chrome.scripting?.registerContentScripts) return;
   const registered = await chrome.scripting.getRegisteredContentScripts({ids:['lt-fab']});
   // 「全站授权版」把 button.js 写进了 manifest 的 content_scripts，浏览器自己会注入，不用再注册。
   const viaManifest = (chrome.runtime.getManifest?.().content_scripts || []).some(item => (item.js || []).includes('button.js'));
@@ -159,9 +188,34 @@ async function setSiteRule(tabId, rule) {
   return {rule};
 }
 
+// 自检：给「按钮变红」和设置页的诊断面板提供事实，不回传任何密钥。
+async function healthReport() {
+  const settings = await preferences();
+  const {ltBootError, consents = {}} = await chrome.storage.local.get(['ltBootError', 'consents']);
+  const slot = credentialSlots(settings.service);
+  return {
+    sw: true,
+    version: chrome.runtime.getManifest().version,
+    bootError: ltBootError || '',
+    apis: {
+      scripting: !!chrome.scripting?.executeScript,
+      registerScripts: !!chrome.scripting?.registerContentScripts,
+      storageSession: !!chrome.storage.session,
+      setAccessLevel: typeof chrome.storage.local?.setAccessLevel === 'function',
+      openOptionsPage: typeof chrome.runtime.openOptionsPage === 'function',
+    },
+    service: settings.service,
+    autoTranslate: settings.autoTranslate,
+    floatingButton: settings.floatingButton,
+    hasKey: !!await storedCredential(settings),
+    hasVault: !!(await chrome.storage.local.get(slot.vault))[slot.vault],
+    consent: !!consents[LT_CONFIG.consentKey(settings)],
+  };
+}
 async function dispatch(message, sender) {
   await ready;
   if (!message || typeof message.type !== 'string') throw new Error('消息格式无效');
+  if (message.type === 'HEALTH') return healthReport();
   if (trusted(sender)) {
     switch (message.type) {
       case 'GET_SETTINGS': return settingsView();
@@ -171,12 +225,12 @@ async function dispatch(message, sender) {
         const {[slot.vault]:vault} = await chrome.storage.local.get(slot.vault);
         if (vault?.endpoint !== endpoint) throw new Error('此接口没有已保存的密钥');
         const apiKey = await LT_VAULT.open(vault, message.password);
-        await chrome.storage.session.set({[slot.plain]:{apiKey, endpoint}}); return settingsView();
+        await SESSION.set({[slot.plain]:{apiKey, endpoint}}); return settingsView();
       });
       case 'CLEAR_KEY': return serialize(async () => {
         const slot = credentialSlots((await preferences()).service);
         cancelJobs(); translationCache.clear(); inFlightTranslations.clear();
-        await chrome.storage.session.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]); return settingsView();
+        await SESSION.remove(slot.plain); await chrome.storage.local.remove([slot.plain, slot.vault]); return settingsView();
       });
       case 'CLEAR_CACHE': translationCache.clear(); return {};
       case 'TEST_CONNECTION': {
@@ -217,6 +271,12 @@ async function dispatch(message, sender) {
   if (!pageSender(sender)) throw new Error('此页面无权执行该操作');
   switch (message.type) {
     case 'GET_PAGE_SETTINGS': return {settings:await pageSettings(sender.url)};
+    case 'AUTO_START': {
+      // 无工具栏环境里唯一的自动入口。老内核可能根本没有 chrome.scripting，
+      // 所以失败原因必须回给页面上的按钮，否则用户什么都看不到。
+      try { await ensurePage(sender.tab.id); return {started:true}; }
+      catch (error) { return {started:false, reason:error?.message || '无法注入翻译脚本'}; }
+    }
     case 'OPEN_SETTINGS':
       // 悬浮按钮的落地动作：内容脚本没有 openOptionsPage，只能由后台代劳。
       await chrome.runtime.openOptionsPage(); return {};
@@ -241,7 +301,7 @@ async function dispatch(message, sender) {
     case 'STATUS_UPDATE': {
       const data = message.data || {};
       const status = {phase:['idle','translating','watching','partial','error','stopped'].includes(data.phase) ? data.phase : 'idle', count:Math.max(0, Math.min(100000, Number(data.count)||0)), isTranslating:!!data.isTranslating, isTranslated:!!data.isTranslated, error:typeof data.error === 'string' ? data.error.slice(0,200) : ''};
-      await chrome.storage.session.set({[`ltStatus_${sender.tab.id}`]:status});
+      await SESSION.set({[`ltStatus_${sender.tab.id}`]:status});
       await chrome.action.setTitle({tabId:sender.tab.id, title:'久远的翻译工具'});
       await chrome.action.setBadgeText({tabId:sender.tab.id, text:status.phase === 'translating' ? '…' : ['partial','error'].includes(status.phase) ? '!' : status.isTranslated ? '✓' : ''}); return {};
     }
@@ -272,10 +332,10 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(() => {void ready.then(() => Promise.all([syncSiteScripts(), syncFloatingButton()]));});
 chrome.permissions.onRemoved.addListener(() => {cancelJobs(); void syncSiteScripts(); void syncFloatingButton();});
 chrome.permissions.onAdded.addListener(() => {void syncFloatingButton();});
-chrome.tabs.onRemoved.addListener(tabId => {cancelJobs(tabId); void chrome.storage.session.remove(`ltStatus_${tabId}`);});
+chrome.tabs.onRemoved.addListener(tabId => {cancelJobs(tabId); void SESSION.remove(`ltStatus_${tabId}`);});
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') {
-    cancelJobs(tabId); void chrome.storage.session.remove(`ltStatus_${tabId}`);
+    cancelJobs(tabId); void SESSION.remove(`ltStatus_${tabId}`);
     void chrome.action.setBadgeText({tabId, text:''}).catch(() => {});
     void chrome.action.setTitle({tabId, title:'久远的翻译工具'}).catch(() => {});
   }

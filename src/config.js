@@ -33,7 +33,7 @@ const LT_CONFIG = (() => {
       result[key] = typeof value === 'string' ? value.trim() : value;
     }
     if (!['google', 'openai', 'deepl'].includes(result.service) || !presets[result.provider] ||
-        !['free', 'pro'].includes(result.deeplPlan) ||
+        !['free', 'pro'].includes(result.deeplPlan) || !['auto', 'always', 'off'].includes(result.autoTranslate) ||
         !['off', 'default'].includes(result.thinkingMode) || !['underline', 'block', 'highlight'].includes(result.theme) ||
         !['inherit', 'custom'].includes(result.translationColorMode) || !/^#[\da-f]{6}$/i.test(result.translationColor) ||
         !['zh-CN','zh-TW','en','ja','ko','fr','de','es','ru','ar','pt','it','vi','th'].includes(result.targetLang)) {
@@ -45,7 +45,7 @@ const LT_CONFIG = (() => {
     return result;
   }
   function publicSettings(settings) {
-    return Object.fromEntries(['service','targetLang','aggressiveMode','floatingButton','theme','translationColorMode','translationColor','litellmBaseUrl'].map(key => [key, settings[key]]));
+    return Object.fromEntries(['service','targetLang','aggressiveMode','floatingButton','autoTranslate','theme','translationColorMode','translationColor','litellmBaseUrl'].map(key => [key, settings[key]]));
   }
   function originPattern(value) {
     const url = new URL(value);

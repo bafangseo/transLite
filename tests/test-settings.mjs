@@ -4,11 +4,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import {webcrypto} from 'node:crypto';
 
-function harness(responder) {
-  const data={local:{},sync:{},session:{}}, levels={}, sent=[], calls=[], opened=[], scripts={};
+function harness(responder, legacy = false) {
+  const data={local:{},sync:{},session:{}}, levels={}, sent=[], calls=[], opened=[], scripts={}, injected=[];
   const event={addListener(){}};
   const area=name=>({
-    async setAccessLevel(value){levels[name]=value.accessLevel;},
+    ...(legacy?{}:{async setAccessLevel(value){levels[name]=value.accessLevel;}}),
     async get(keys){return Object.fromEntries((Array.isArray(keys)?keys:[keys]).filter(key=>key in data[name]).map(key=>[key,structuredClone(data[name][key])]));},
     async set(values){Object.assign(data[name],structuredClone(values));},
     async remove(keys){for(const key of Array.isArray(keys)?keys:[keys])delete data[name][key];},
@@ -16,15 +16,17 @@ function harness(responder) {
   const context=vm.createContext({console,URL,DOMException,AbortController,AbortSignal,setTimeout,clearTimeout,TextEncoder,TextDecoder,crypto:webcrypto,btoa,atob,
     importScripts(...files){for(const file of files)vm.runInContext(fs.readFileSync(new URL(`../src/${file}`,import.meta.url),'utf8'),context);},
     chrome:{runtime:{id:'fixture',getURL:path=>`chrome-extension://fixture/${path}`,onMessage:event,onInstalled:event,onStartup:event,openOptionsPage:async()=>{opened.push(true);},getManifest:()=>({})},
-      storage:{local:area('local'),sync:area('sync'),session:area('session')},
+      storage:{local:area('local'),sync:area('sync'),...(legacy?{}:{session:area('session')})},
       scripting:{
         getRegisteredContentScripts:async({ids=[]}={})=>(scripts.registered||[]).filter(item=>!ids.length||ids.includes(item.id)),
         registerContentScripts:async list=>{scripts.registered=[...(scripts.registered||[]),...structuredClone(list)];},
         updateContentScripts:async list=>{scripts.registered=(scripts.registered||[]).map(item=>structuredClone(list.find(next=>next.id===item.id)||item));},
         unregisterContentScripts:async({ids=[]}={})=>{scripts.registered=(scripts.registered||[]).filter(item=>!ids.includes(item.id));},
+        insertCSS:async()=>{injected.push('css');},
+        executeScript:async target=>{injected.push(target.files.join(','));},
       },
       permissions:{contains:async()=>true,request:async()=>true,onRemoved:event,onAdded:event},commands:{onCommand:event},contextMenus:{onClicked:event},
-      tabs:{onRemoved:event,onUpdated:event,query:async()=>[{id:1,url:'https://page.test/'}],sendMessage:async(id,message)=>sent.push(message)},
+      tabs:{onRemoved:event,onUpdated:event,get:async id=>({id,url:'https://page.test/'}),query:async()=>[{id:1,url:'https://page.test/'}],sendMessage:async(id,message)=>{sent.push(message);return {};}},
       action:{setBadgeText:async()=>{},setTitle:async()=>{}},
     },
     fetch:async(url,options)=>{calls.push({url,options});if(responder)return responder(url,options);return {ok:true,json:async()=>({choices:[{message:{content:'["测试译文"]'}}]})};},
@@ -32,7 +34,7 @@ function harness(responder) {
   vm.runInContext(fs.readFileSync(new URL('../src/background.js',import.meta.url),'utf8'),context);
   const ui={id:'fixture',url:'chrome-extension://fixture/options/options.html'};
   const page={id:'fixture',url:'https://page.test/',tab:{id:1},frameId:0,documentId:'doc'};
-  return {data,levels,sent,calls,opened,scripts,context,ui,page,send:(message,sender=ui)=>context.dispatch(message,sender)};
+  return {data,levels,sent,calls,opened,scripts,injected,context,ui,page,send:(message,sender=ui)=>context.dispatch(message,sender)};
 }
 
 test('only trusted extension UI can configure credentials; page settings and messages contain no secrets',async()=>{
@@ -200,4 +202,54 @@ test('the all-sites build relies on the manifest injection instead of registerin
   h.context.chrome.runtime.getManifest=()=>({content_scripts:[{matches:['http://*/*'],js:['button.js']}]});
   await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},consent:true});
   assert.equal(fab(),undefined,'button.js already ships in manifest content_scripts');
+});
+
+test('an engine without storage.session or setAccessLevel still boots and keeps the key', async () => {
+  const h=harness(undefined,true);
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},apiKey:'legacy-secret',consent:true});
+  assert.deepEqual(h.levels,{},'setAccessLevel is skipped instead of throwing');
+  assert.equal(h.data.local.credential.apiKey,'legacy-secret');
+  const view=await h.send({type:'GET_SETTINGS'});
+  assert.equal(view.hasKey,true,'the missing session area falls back to in-memory');
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},rememberKey:true,password:'test-password-long'});
+  assert.ok(h.data.local.vault);
+  await assert.rejects(h.send({type:'UNLOCK_KEY',password:'wrong-password'}),/解锁失败/);
+});
+
+test('auto translate defaults to environment detection and rejects unknown modes', async () => {
+  const h=harness();
+  assert.equal((await h.send({type:'GET_SETTINGS'})).settings.autoTranslate,'auto');
+  assert.equal((await h.send({type:'GET_PAGE_SETTINGS'},h.page)).settings.autoTranslate,'auto');
+  for (const autoTranslate of ['always','off','auto']) {
+    await h.send({type:'SAVE_SETTINGS',settings:{service:'openai',autoTranslate}});
+    assert.equal((await h.send({type:'GET_SETTINGS'})).settings.autoTranslate,autoTranslate);
+  }
+  await assert.rejects(h.send({type:'SAVE_SETTINGS',settings:{autoTranslate:'sometimes'}}),/设置选项无效/);
+});
+
+test('the bootstrapping button can wake the page without a toolbar, but the UI cannot', async () => {
+  const h=harness();
+  await h.send({type:'AUTO_START'},h.page);
+  assert.deepEqual(h.injected,['css','defaults.js,adapters/litellm.js,adapters/linear.js,adapters/steam.js,dom.js,content.js,button.js'],'injects the page bundle');
+  await assert.rejects(h.send({type:'AUTO_START'}),/未知操作/,'extension pages cannot smuggle the command');
+});
+
+test('a failed bootstrap reports the reason instead of failing silently', async () => {
+  const h=harness();
+  h.context.chrome.scripting.executeScript=async()=>{throw new Error('chrome.scripting is not a function');};
+  const response=await h.send({type:'AUTO_START'},h.page);
+  assert.equal(response.started,false,'the page must learn that nothing was injected');
+  assert.match(response.reason,/无法访问此页面/,'and it must carry a human readable reason');
+});
+
+test('the self-check reports capabilities without leaking the key', async () => {
+  const h=harness();
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},apiKey:'health-secret',consent:true});
+  const health=await h.send({type:'HEALTH'});
+  assert.equal(health.sw,true);
+  assert.equal(health.consent,true);
+  assert.equal(health.hasKey,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(health.apis)),{scripting:true,registerScripts:true,storageSession:true,setAccessLevel:true,openOptionsPage:true});
+  assert.equal(JSON.stringify(health).includes('health-secret'),false,'never echo the credential');
+  assert.equal((await h.send({type:'HEALTH'},h.page)).sw,true,'pages may ask too, for the floating button state');
 });

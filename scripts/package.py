@@ -14,7 +14,7 @@ manifest = json.loads((SOURCE / "manifest.json").read_text(encoding="utf-8"))
 files = [
     "manifest.json", "defaults.js", "config.js", "vault.js", "model-policy.js", "ui.js",
     "background.js", "translation.js", "dom.js", "content.js", "button.js", "content.css", "privacy.html",
-    "adapters/linear.js", "adapters/litellm.js",
+    "adapters/linear.js", "adapters/litellm.js", "adapters/steam.js",
     "options/options.html", "options/options.js", "options/options.css",
     "popup/popup.html", "popup/popup.js", "popup/popup.css", "images/1.png",
 ]
@@ -69,10 +69,15 @@ write_zip(ROOT / "dist" / f"transLite-{manifest['version']}.zip", manifest)
 if "--all-sites" in sys.argv[1:]:
     variant = json.loads(json.dumps(manifest))
     variant.pop("optional_host_permissions", None)
+    # 老内核会因 minimum_chrome_version 直接拒绝加载，这一版同时放宽。
+    variant.pop("minimum_chrome_version", None)
     variant["host_permissions"] = ["http://*/*", "https://*/*"]
+    # 参考沉浸式翻译：把整套脚本静态注入，不依赖 chrome.scripting（Chromium 88+ 才有）。
+    # Steam 的 CEF 内核通常更老，靠后台 executeScript 注入会静默失败。
     variant["content_scripts"] = [{
         "matches": ["http://*/*", "https://*/*"],
-        "js": ["button.js"],
+        "js": ["defaults.js", "adapters/litellm.js", "adapters/linear.js", "adapters/steam.js", "dom.js", "content.js", "button.js"],
+        "css": ["content.css"],
         "run_at": "document_idle",
     }]
     variant["description"] = manifest["description"] + "（全站授权版）"

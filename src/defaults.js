@@ -10,6 +10,7 @@ var LT_DEFAULTS = {
   targetLang: 'zh-CN',
   aggressiveMode: false,
   floatingButton: true,
+  autoTranslate: 'auto',
   theme: 'underline',
   translationColorMode: 'inherit',
   translationColor: '#1a73e8',

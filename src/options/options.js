@@ -6,7 +6,8 @@ function collect() {
   return LT_CONFIG.sanitize({service:value('service'), provider:$('provider').value, apiBaseUrl:$('api-base-url').value,
     deeplPlan:$('deepl-plan').value,
     model:$('model').value, thinkingMode:$('thinking-mode').value, systemPrompt:$('system-prompt').value,
-    targetLang:$('target-lang').value, aggressiveMode:$('aggressive-mode').checked, floatingButton:$('floating-button').checked, theme:value('theme'),
+    targetLang:$('target-lang').value, aggressiveMode:$('aggressive-mode').checked, floatingButton:$('floating-button').checked,
+    autoTranslate:$('auto-translate').value, theme:value('theme'),
     translationColorMode:value('translation-color-mode'), translationColor:$('translation-color').value,
     litellmBaseUrl:$('litellm-base-url').value});
 }
@@ -27,7 +28,7 @@ function updateHint() {
 function apply(result) {
   view = result;
   const s = result.settings;
-  for (const [id,key] of Object.entries({'provider':'provider','api-base-url':'apiBaseUrl','deepl-plan':'deeplPlan','model':'model','thinking-mode':'thinkingMode','system-prompt':'systemPrompt','target-lang':'targetLang','translation-color':'translationColor','litellm-base-url':'litellmBaseUrl'})) $(id).value = s[key];
+  for (const [id,key] of Object.entries({'provider':'provider','api-base-url':'apiBaseUrl','deepl-plan':'deeplPlan','model':'model','thinking-mode':'thinkingMode','system-prompt':'systemPrompt','target-lang':'targetLang','auto-translate':'autoTranslate','translation-color':'translationColor','litellm-base-url':'litellmBaseUrl'})) $(id).value = s[key];
   check('service',s.service); check('theme',s.theme); check('translation-color-mode',s.translationColorMode);
   $('aggressive-mode').checked = s.aggressiveMode;
   $('floating-button').checked = s.floatingButton !== false;
@@ -46,6 +47,19 @@ function apply(result) {
   }
   if (!$('site-rules').children.length) $('site-rules').textContent='尚未设置网站偏好。在网页的扩展弹窗中添加。';
   updateHint();
+  // 默认值是「开」，但没授权访问所有网站时其实注入不进去：别让开关骗人。
+  void syncFloatingToggle();
+}
+
+async function syncFloatingToggle() {
+  const granted = await chrome.permissions.contains({origins:['http://*/*','https://*/*']}).catch(()=>false);
+  const box = $('floating-button');
+  const hint = $('floating-hint');
+  box.checked = view.settings.floatingButton !== false && granted;
+  if (hint) hint.dataset.warn = granted ? '' : '1';
+  if (hint) hint.textContent = granted
+    ? '开启需授权访问所有网站；默认构建只注入这一个按钮脚本。'
+    : '还没授权访问所有网站，悬浮入口不会生效。勾选时浏览器会弹授权。';
 }
 async function run(action) {
   if (busy) return;
@@ -76,6 +90,19 @@ function bind() {
   $('btn-clear-cache').addEventListener('click',()=>run(async()=>{await LT_UI.request('CLEAR_CACHE');status('临时译文缓存已清除');}));
   $('btn-reset').addEventListener('click',()=>{apply({...view,settings:{...LT_DEFAULTS},hasKey:false,hasVault:false,consent:false});status('已填写默认值，保存后生效');});
   $('btn-shortcuts').addEventListener('click',()=>chrome.tabs.create({url:'chrome://extensions/shortcuts'}));
+  $('btn-health').addEventListener('click',()=>run(async()=>{
+    const health=await LT_UI.request('HEALTH');
+    const yes=value=>value?'有':'无';
+    $('health-output').textContent=[
+      `版本 ${health.version}｜服务 ${health.service}｜自动翻译 ${health.autoTranslate}｜悬浮按钮 ${health.floatingButton?'开':'关'}`,
+      `已同意发送待译文字：${health.consent?'是':'否'}｜已存密钥：${health.hasKey?'是':'否'}${health.hasVault?'（加密）':''}`,
+      `chrome.scripting ${yes(health.apis.scripting)}｜registerContentScripts ${yes(health.apis.registerScripts)}`,
+      `storage.session ${yes(health.apis.storageSession)}｜setAccessLevel ${yes(health.apis.setAccessLevel)}`,
+      `openOptionsPage ${yes(health.apis.openOptionsPage)}`,
+      `启动错误：${health.bootError||'无'}`,
+      `浏览器：${navigator.userAgent}`,
+    ].join('\n');
+  }));
   document.querySelector('.toggle-password').addEventListener('click',()=>{$('api-key').type=$('api-key').type==='password'?'text':'password';});
   // 悬浮入口要覆盖所有站点，勾选时立刻索要权限；拒绝就退回关闭状态。
   $('floating-button').addEventListener('change',async()=>{
@@ -93,7 +120,7 @@ function bind() {
   });
   for(const button of document.querySelectorAll('.preset-btn')) button.addEventListener('click',()=>{$('model').value=button.dataset.model;updateHint();});
   for(const input of document.querySelectorAll('input,select,textarea')) input.addEventListener('input',()=>{
-    if(['model','api-key','api-base-url','deepl-plan','thinking-mode','target-lang','system-prompt'].includes(input.id)||input.name==='service') $('test-result').textContent='';
+    if(['model','api-key','api-base-url','deepl-plan','thinking-mode','target-lang','auto-translate','system-prompt'].includes(input.id)||input.name==='service') $('test-result').textContent='';
     if(['api-base-url','deepl-plan'].includes(input.id)||input.name==='service') $('service-consent').checked=false;
     updateHint();
   });
