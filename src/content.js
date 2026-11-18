@@ -406,9 +406,8 @@ const steamModalFrame = typeof navigator !== 'undefined' && isSteamClient() ? '#
 function getTranslatableElements() {
   const adapter = getSiteAdapter();
   const customExclude = validCustomSelector(state.settings?.excludeSelectors);
-  const fullExclude = customExclude
-    ? `${EXCLUDE_PARENTS}, ${customExclude}`
-    : EXCLUDE_PARENTS;
+  const adapterExclude = adapter?.excludeSelectors?.length ? adapter.excludeSelectors.join(', ') : '';
+  const fullExclude = [EXCLUDE_PARENTS, customExclude, adapterExclude].filter(Boolean).join(', ');
 
   // 反向遍历（内层 → 外层），内层元素优先，防止外层容器把整页文字合并翻译到底部
   const selectors = getTranslateSelectors();
@@ -425,6 +424,8 @@ function getTranslatableElements() {
     if (!state.settings?.aggressiveMode && isClickable(el)) continue;
     // Steam 客户端自己的弹层容器（参考沉浸式翻译的 isSteam 专属规则）。
     if (steamModalFrame && el.closest(steamModalFrame)) continue;
+    // 统计面板这类「表格容器」：里面的 td 会各自翻译，整块再翻一遍会把数字重复输出一次。
+    if (el.querySelector?.('table')) continue;
     // 内部还有会被单独选中的块（如描述里的 <p>/<h1>）时交给内层，避免整块再翻一遍。
     // 注意 <b>/<a>/<br> 不在选择器里，这类富文本仍会整块翻译。
     // 激进模式下选择器包含 div/span/a，这条会把几乎一切都排除掉，所以只在常规模式生效。
@@ -438,7 +439,9 @@ function getTranslatableElements() {
     const minLength = adapter?.minTextLength ?? 4;
     if (text.trim().length < minLength && localTranslation === null) continue;
     // 跳过超长容器（说明是包含子元素的父容器，不应直接翻译）
-    if (text.trim().length > 1500) continue;
+    // 上限从 1500 放宽到 6000：Steam 工坊的说明经常 2000–3000 字，
+    // 之前整段被当成「太大」跳过；真正过长的请求会在 translation.js 里按句切分。
+    if (text.trim().length > 6000) continue;
     if (isTargetLang(text)) continue;
     // 跳过纯 ASCII 的"数字 + 单词"短文本（如 "2 stars"、"15 forks"），
     // 这类 UI 计数徽章由翻译服务随机决定是否翻译，容易造成不一致。
@@ -655,8 +658,12 @@ function isTargetLang(text) {
   const detector = detectors[targetBase];
   if (!detector) return false;
 
-  const matchCount = (t.match(detector.regex) || []).length;
-  return matchCount / t.length > detector.threshold;
+  // 分母只算「文字」：14,164 这种纯数字，以及数字占比很高的统计表，
+  // 之前会被算成「非目标语言」而送去翻译，译文又把数字念一遍。
+  const letters = t.replace(/[^\p{L}]/gu, '');
+  if (!letters) return true;
+  const matchCount = (letters.match(detector.regex) || []).length;
+  return matchCount / letters.length > detector.threshold;
 }
 
 // ---- Translation queue: viewport first, bounded concurrent batches. ----

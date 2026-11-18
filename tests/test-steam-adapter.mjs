@@ -29,5 +29,15 @@ for (const selector of [".workshopItemTitle", ".workshopItemShortDesc", ".worksh
 // 工坊卡片整体是 <a>，不放开交互元素限制会被 isClickable 全部跳过
 assert.equal(adapter.allowInteractiveUi, true, "workshop cards are links, so interactive elements must be allowed");
 
+// 评论区不翻译：工坊内页几十上百条评论，翻了既吵又慢
+assert.ok(Array.isArray(adapter.excludeSelectors), "adapter should declare excludeSelectors");
+for (const selector of ['.commentthread_comments', '.commentthread_comment', '.commentthread_comment_text']) {
+  assert.ok(adapter.excludeSelectors.includes(selector), `missing exclude ${selector}`);
+}
+assert.ok(
+  !adapter.selectors.includes('.commentthread_comment_text'),
+  "comment text must not be a translation target anymore",
+);
+
 // 适配器只加选择器，不该接管本地词典（否则会把页面文字换成写死的译文）
 assert.equal(adapter.translate, undefined, "no local dictionary: Steam content must go through the translator");

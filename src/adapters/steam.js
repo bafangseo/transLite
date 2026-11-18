@@ -25,8 +25,6 @@
     '.game_area_dlc_name',
     '.game_area_details_specs',
     '.detailsStatRight',
-    '.commentthread_comment_text',
-    '.commentthread_author_link ~ .commentthread_comment_text',
     '.workshop_showcase_item_name',
   ];
 
@@ -49,6 +47,14 @@
     // 工坊卡片本身就是链接，不放开这条会被 isClickable 全部跳过。
     allowInteractiveUi: true,
     minTextLength: 2,
+    // 评论区按用户要求不翻译：工坊内页动辄几十上百条评论，翻了既吵又慢。
+    excludeSelectors: [
+      '.commentthread_comments',
+      '.commentthread_comment',
+      '.commentthread_comment_text',
+      '.commentthread_comment_author',
+      '.commentthread_comment_content',
+    ],
     selectors: [...workshopSelectors, ...communitySelectors],
   };
   root.LT_SITE_ADAPTERS = adapters;

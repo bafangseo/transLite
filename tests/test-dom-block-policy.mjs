@@ -45,6 +45,10 @@ assert.equal(policy({ position: "absolute" }), false);
 assert.equal(policy({ position: "fixed" }), false);
 assert.equal(policy({ float: "left" }), false);
 
+// 表格容器（Steam 统计面板）：单元格各自翻，整段再追加会把数字重复一遍
+assert.equal(policy({ hasTable: true, textLength: 60 }), false, "table containers must not get a block");
+assert.equal(policy({ hasTable: false, textLength: 60 }), true);
+
 // 按钮类容器：靠 cursor 识别
 assert.equal(policy({ cursor: "pointer" }), false, "cursor:pointer containers are controls");
 

@@ -121,7 +121,8 @@ var LT_DOM = (() => {
   }
 
   // 纯函数：只吃事实，方便单测（不依赖 DOM）。
-  function blockPolicy({ inControl, display, cursor, position, float, textLength, controlRatio }) {
+  function blockPolicy({ inControl, display, cursor, position, float, textLength, controlRatio, hasTable }) {
+    if (hasTable) return false;                        // 表格容器（统计面板）：单元格各自翻，整段再加会重复
     if (inControl) return false;                       // 自己在链接/按钮里
     if (/^inline/.test(display || '')) return false;   // 行内元素里塞块必然乱
     if (/flex|grid/.test(display || '')) return false; // 自己就是 flex/grid 容器
@@ -147,6 +148,7 @@ var LT_DOM = (() => {
         float: style.float,
         textLength: text.length,
         controlRatio: text.length ? controlled / text.length : 0,
+        hasTable: !!el.querySelector('table'),
       });
     } catch (_) {
       return false;
