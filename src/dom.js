@@ -156,6 +156,10 @@ var LT_DOM = (() => {
   }
 
   function isCurrent(unit) {
+    if (!unit || !unit.el || unit.el.isConnected === false) return false;
+    // 适配器单元（adapter 模式）只有 el，没有 sources：元素还在就算有效。
+    // 之前直接读 unit.sources.every 会抛 TypeError，页面一有变动就炸。
+    if (!Array.isArray(unit.sources)) return !unit.el.closest?.(forbidden);
     return unit.el.isConnected && unit.sources.every(({ node, value, parent }) =>
       node.isConnected && node.parentElement === parent && node.nodeValue === value && unit.el.contains(node) && !parent.closest(forbidden));
   }

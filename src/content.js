@@ -273,7 +273,7 @@ function setupMutationObserver() {
       if (!affected) continue;
       if (unit.el.isConnected) state.dirtyRoots.add(unit.el);
       unit.span?.remove();
-      unit.sources.forEach(source => state.completedNodes.delete(source.node));
+      unit.sources?.forEach(source => state.completedNodes.delete(source.node));
       state.outputUnits.delete(unit);
       state.translatedCount = Math.max(0, state.translatedCount - 1);
     }
