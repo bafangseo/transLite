@@ -71,16 +71,20 @@ async function handleTranslation(texts, settings = {}, context = {}) {
   if (missing.length) {
     // Split by both item count and payload size; a long article cannot create
     // one enormous URL or force every visible paragraph to wait for it.
-    // Only the Google channel is limited by query-string length; DeepL and the
-    // chat API both take a JSON body, so one text can be much longer there.
-    const provider = ['openai', 'deepl'].includes(settings.service) ? settings.service : 'google';
-    const jobs = missing.flatMap(item => splitSource(item.text, provider === 'google' ? 600 : 2400)
+    // Only the Google channel is limited by query-string length; DeepL, the
+    // chat API and the Edge endpoint all take a JSON body, so one text can be
+    // much longer there — Edge still rejects anything past ~1800 characters.
+    const provider = ['openai', 'deepl', 'microsoft'].includes(settings.service) ? settings.service : 'google';
+    const splitLimit = provider === 'google' ? 600 : provider === 'microsoft' ? 1800 : 2400;
+    const maxItems = provider === 'microsoft' ? 50 : 8;
+    const maxCost = provider === 'google' ? 5500 : provider === 'microsoft' ? 8000 : 3600;
+    const jobs = missing.flatMap(item => splitSource(item.text, splitLimit)
       .map((text, part) => ({ item, text, part })));
     const batches = [];
     let batch = [], size = 0;
     for (const job of jobs) {
       const cost = provider === 'google' ? encodeURIComponent(job.text).length + 50 : job.text.length;
-      if (batch.length && (batch.length >= 8 || size + cost > (provider === 'google' ? 5500 : 3600))) {
+      if (batch.length && (batch.length >= maxItems || size + cost > maxCost)) {
         batches.push(batch);
         batch = []; size = 0;
       }
@@ -96,7 +100,9 @@ async function handleTranslation(texts, settings = {}, context = {}) {
             ? await translateWithOpenAI(chunk.map(job => job.text), settings, context)
             : provider === 'deepl'
               ? await fetchDeeplBatch(chunk.map(job => job.text), settings, context)
-              : await fetchGoogleBatch(chunk.map(job => job.text), settings.targetLang || 'zh-CN', context);
+              : provider === 'microsoft'
+                ? await fetchMicrosoftBatch(chunk.map(job => job.text), settings.targetLang || 'zh-CN', context)
+                : await fetchGoogleBatch(chunk.map(job => job.text), settings.targetLang || 'zh-CN', context);
           chunk.forEach((job, index) => {
             parts.get(job.item)[job.part] = translations[index];
             const left = remaining.get(job.item) - 1;
@@ -142,6 +148,9 @@ function splitSource(text, limit) {
 
 async function fetchJson(url, options = {}, context = {}) {
   const signal = context.signal;
+  // 默认拒绝跳转：翻译接口不该把待译文字转手给另一个域名。Edge 端点是个例外，
+  // 它在部分地区会 302 到 bing.com，所以那边显式传 redirect:'follow'。
+  const { redirect = 'error', ...init } = options;
   for (let attempt = 0; ; attempt++) {
     assertActive(signal);
     const result = await withRequestSlot(async () => {
@@ -150,7 +159,7 @@ async function fetchJson(url, options = {}, context = {}) {
       signal?.addEventListener('abort', abort, {once:true});
       const timer = setTimeout(abort, 25_000);
       try {
-        const response = await fetch(url, { ...options, signal:controller.signal, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer' });
+        const response = await fetch(url, { ...init, signal:controller.signal, credentials:'omit', redirect, referrerPolicy:'no-referrer' });
         if (!response.ok) {
           if ([429, 500, 502, 503, 504].includes(response.status) && attempt < 2) {
             const header = response.headers?.get('Retry-After');
@@ -200,6 +209,34 @@ async function fetchGoogleBatch(chunk, targetLang, context = {}) {
   if (parts.length === chunk.length && parts.every(part => part.trim())) return parts.map(part => part.trim());
   // The same global limiter also bounds fallback requests.
   return Promise.all(chunk.map(async text => googleText(await fetchJson(googleUrl(text, targetLang), {}, context))));
+}
+
+// Microsoft 走 Edge 浏览器自带的翻译端点：POST 一个纯字符串数组，回同样长度的
+// 数组，每条一项译文。没有密钥、没有配额，也不需要 Google 那套分隔符，所以一批
+// 可以塞几十段；反过来它不做逐条兜底——条数对不上就整批失败，交给上层提示重试。
+const MICROSOFT_ENDPOINT = 'https://edge.microsoft.com/translate/translatetext';
+
+function microsoftUrl(targetLang) {
+  const url = new URL(MICROSOFT_ENDPOINT);
+  url.searchParams.set('to', LT_CONFIG.microsoftTarget(targetLang));
+  // Edge 客户端固定带这个参数；不带也能通，带上更贴近官方调用。
+  url.searchParams.set('isEnterpriseClient', 'false');
+  // 故意不传 from：让服务端自己检测，省掉一次本地语言判断，响应里会带 detectedLanguage。
+  return url.href;
+}
+
+async function fetchMicrosoftBatch(chunk, targetLang, context = {}) {
+  const data = await fetchJson(microsoftUrl(targetLang), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chunk),
+    redirect: 'follow',
+  }, context);
+  if (!Array.isArray(data) || data.length !== chunk.length) throw new Error('微软翻译返回的译文数量不匹配');
+  const texts = data.map(item => typeof item?.translations?.[0]?.text === 'string' ? item.translations[0].text.trim() : '');
+  // 空串意味着这批被服务端截断了：整批报错比把半截译文写进页面更安全。
+  if (texts.some(text => !text)) throw new Error('微软翻译返回了空译文');
+  return texts;
 }
 
 // DeepL returns one entry per submitted text, in the same order, so neither a

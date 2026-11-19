@@ -14,7 +14,7 @@ function collect() {
 function status(text, error = false) { $('save-status').textContent = text; $('save-status').style.opacity = '1'; $('save-status').style.color = error ? '#ffdfdf' : '#fff'; }
 function updateHint() {
   const service = value('service');
-  $('key-config').classList.toggle('hidden', service === 'google');
+  $('key-config').classList.toggle('hidden', !LT_CONFIG.needsKey(service));
   $('openai-config').classList.toggle('hidden', service !== 'openai');
   $('deepl-config').classList.toggle('hidden', service !== 'deepl');
   $('remember-fields').classList.toggle('hidden', !$('remember-key').checked);
@@ -71,7 +71,8 @@ async function save(test = false) {
   const settings=collect();
   if (test && !$('service-consent').checked) throw new Error('请先确认待译文字的接收方');
   // Request permissions before any await, preserving the button's user gesture.
-  const origins=settings.service !== 'google' || test ? [LT_CONFIG.originPattern(LT_CONFIG.destination(settings))] : [];
+  // 免密钥服务（Google / 微软）只在测试连接时要一次授权，正常保存不打扰。
+  const origins=LT_CONFIG.needsKey(settings.service) || test ? [LT_CONFIG.originPattern(LT_CONFIG.destination(settings))] : [];
   const grant=origins.length ? chrome.permissions.request({origins}) : Promise.resolve(true);
   if (!await grant) throw new Error('未获得服务访问权限，设置未保存');
   const result=await LT_UI.request('SAVE_SETTINGS',{settings, apiKey:$('api-key').value, rememberKey:$('remember-key').checked, password:$('vault-password').value, consent:$('service-consent').checked});

@@ -8,6 +8,12 @@ const LT_CONFIG = (() => {
   };
   // DeepL 用两个域名区分版本：免费版密钥（以 :fx 结尾）只认 api-free。
   const deeplOrigins = { free: 'https://api-free.deepl.com', pro: 'https://api.deepl.com' };
+  // 微软走 Edge 浏览器自带的翻译端点，和 Google 一样不需要任何密钥。
+  // 端点带 Access-Control-Allow-Origin: *，因此也不占用站点授权之外的 host 权限。
+  const microsoftOrigin = 'https://edge.microsoft.com';
+  const noKeyServices = ['google', 'microsoft'];
+  // Edge 的语种码不是 BCP-47：中文要写成 zh-Hans/zh-Hant，葡语两套变体各占一个码。
+  const microsoftTargets = { 'zh-CN': 'zh-Hans', 'zh-TW': 'zh-Hant', pt: 'pt-PT' };
   // DeepL 的目标语言码是独立命名空间，与页面上的 targetLang 不是一套。
   const deeplTargets = {
     'zh-CN': 'ZH-HANS', 'zh-TW': 'ZH-HANT', en: 'EN-US', ja: 'JA', ko: 'KO', fr: 'FR', de: 'DE',
@@ -32,7 +38,7 @@ const LT_CONFIG = (() => {
       if (typeof value !== typeof fallback) throw new Error('设置格式无效');
       result[key] = typeof value === 'string' ? value.trim() : value;
     }
-    if (!['google', 'openai', 'deepl'].includes(result.service) || !presets[result.provider] ||
+    if (!['google', 'microsoft', 'openai', 'deepl'].includes(result.service) || !presets[result.provider] ||
         !['free', 'pro'].includes(result.deeplPlan) || !['auto', 'always', 'off'].includes(result.autoTranslate) ||
         !['off', 'default'].includes(result.thinkingMode) || !['underline', 'block', 'highlight'].includes(result.theme) ||
         !['inherit', 'custom'].includes(result.translationColorMode) || !/^#[\da-f]{6}$/i.test(result.translationColor) ||
@@ -55,11 +61,17 @@ const LT_CONFIG = (() => {
   }
   function destination(settings) {
     if (settings.service === 'deepl') return deeplOrigins[settings.deeplPlan] || deeplOrigins.free;
+    if (settings.service === 'microsoft') return microsoftOrigin;
     return settings.service === 'google' ? 'https://translate.googleapis.com' : new URL(settings.apiBaseUrl).origin;
   }
   // The DeepL key is bound to the plan domain, the AI key to the custom endpoint.
-  function credentialEndpoint(settings) { return settings.service === 'deepl' ? destination(settings) : settings.apiBaseUrl; }
+  // 免密钥服务也绑到自己的域名，免得它们的记录和 AI 接口串号。
+  function credentialEndpoint(settings) {
+    return ['deepl', 'microsoft'].includes(settings.service) ? destination(settings) : settings.apiBaseUrl;
+  }
   function deeplTarget(targetLang) { return deeplTargets[targetLang] || 'ZH-HANS'; }
+  function needsKey(service) { return !noKeyServices.includes(service); }
+  function microsoftTarget(targetLang) { return microsoftTargets[targetLang] || targetLang; }
   function consentKey(settings) { return `${settings.service}:${destination(settings)}`; }
-  return { presets, endpoint, sanitize, publicSettings, originPattern, destination, credentialEndpoint, deeplTarget, consentKey };
+  return { presets, endpoint, sanitize, publicSettings, originPattern, destination, credentialEndpoint, deeplTarget, needsKey, microsoftTarget, consentKey };
 })();

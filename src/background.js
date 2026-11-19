@@ -51,9 +51,12 @@ function cancelJobs(tabId) {
   for (const [key, job] of jobs) if (tabId == null || job.tabId === tabId) { job.controller.abort(); jobs.delete(key); }
 }
 // Each keyed service owns its own slot, so switching between the AI endpoint and
-// DeepL never destroys the other one's saved key.
+// DeepL never destroys the other one's saved key. 微软本身不要密钥，但也要单独占一个槽：
+// 否则「AI 接口 ↔ 微软」来回切会因为 endpoint 变化触发清理，把已存的 AI Key 抹掉。
 function credentialSlots(service) {
-  return service === 'deepl' ? {plain:'credentialDeepl', vault:'vaultDeepl'} : {plain:'credential', vault:'vault'};
+  if (service === 'deepl') return {plain:'credentialDeepl', vault:'vaultDeepl'};
+  if (service === 'microsoft') return {plain:'credentialMicrosoft', vault:'vaultMicrosoft'};
+  return {plain:'credential', vault:'vault'};
 }
 // Keys saved without a password persist in local storage (never synced, trusted
 // contexts only). Password-protected keys live only in the encrypted vault and,
@@ -75,7 +78,7 @@ async function assertRemoteAllowed(settings) {
 }
 async function configForRequest(settings) {
   await assertRemoteAllowed(settings);
-  return {...settings, ...(settings.service === 'google' ? {} : {apiKey:await credentials(settings)})};
+  return {...settings, ...(LT_CONFIG.needsKey(settings.service) ? {apiKey:await credentials(settings)} : {})};
 }
 async function settingsView() {
   const settings = await preferences(), slot = credentialSlots(settings.service);
@@ -90,7 +93,7 @@ async function saveSettings(message) {
   if (message.apiKey != null && typeof message.apiKey !== 'string') throw new Error('API Key 格式无效');
   const apiKey = message.apiKey?.trim();
   if (apiKey && (apiKey.length > 2000 || /\s/.test(apiKey))) throw new Error('API Key 格式无效');
-  if (settings.service !== 'google' && !await chrome.permissions.contains({origins:[LT_CONFIG.originPattern(LT_CONFIG.destination(settings))]})) throw new Error('请先授权访问所选接口');
+  if (LT_CONFIG.needsKey(settings.service) && !await chrome.permissions.contains({origins:[LT_CONFIG.originPattern(LT_CONFIG.destination(settings))]})) throw new Error('请先授权访问所选接口');
   const previous = await preferences();
   const slot = credentialSlots(settings.service), endpoint = LT_CONFIG.credentialEndpoint(settings);
   // Ticking "encrypt with password" without retyping the key upgrades the key already saved for this endpoint.
@@ -241,7 +244,9 @@ async function dispatch(message, sender) {
             ? await translateWithOpenAI(['Hello, welcome to this page.'], settings, {signal:controller.signal})
             : settings.service === 'deepl'
               ? await fetchDeeplBatch(['Hello, welcome to this page.'], settings, {signal:controller.signal})
-              : await fetchGoogleBatch(['Hello, welcome to this page.'], settings.targetLang, {signal:controller.signal});
+              : settings.service === 'microsoft'
+                ? await fetchMicrosoftBatch(['Hello, welcome to this page.'], settings.targetLang, {signal:controller.signal})
+                : await fetchGoogleBatch(['Hello, welcome to this page.'], settings.targetLang, {signal:controller.signal});
           return {elapsed:Date.now()-start, translation:translations[0], destination:LT_CONFIG.destination(settings), policy:settings.service === 'openai' ? LT_MODEL_POLICY.describe(settings) : ''};
         } finally { jobs.delete(key); }
       }

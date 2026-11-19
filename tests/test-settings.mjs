@@ -253,3 +253,37 @@ test('the self-check reports capabilities without leaking the key', async () => 
   assert.equal(JSON.stringify(health).includes('health-secret'),false,'never echo the credential');
   assert.equal((await h.send({type:'HEALTH'},h.page)).sw,true,'pages may ask too, for the floating button state');
 });
+
+test('the Microsoft channel needs no key and posts a bare string array to Edge', async () => {
+  const h=harness((url,options)=>({ok:true,json:async()=>JSON.parse(options.body).map(text=>({translations:[{text:`[MS]${text}`,to:'zh-Hans'}]}))}));
+  const saved=await h.send({type:'SAVE_SETTINGS',settings:{service:'microsoft'},consent:true});
+  assert.equal(saved.destination,'https://edge.microsoft.com');
+  assert.equal(saved.hasKey,false,'no credential is involved');
+  assert.equal('apiKey' in h.data.local,false);
+  await h.send({type:'BEGIN_TASK',taskId:'ms1'},h.page);
+  const result=await h.send({type:'TRANSLATE',taskId:'ms1',texts:['Hello','World']},h.page);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.translations)),['[MS]Hello','[MS]World']);
+  const call=h.calls.find(item=>item.url.includes('edge.microsoft.com'));
+  assert.equal(call.options.method,'POST');
+  assert.match(call.url,/translate\/translatetext/);
+  assert.match(call.url,/to=zh-Hans/,'zh-CN maps to the Edge language code');
+  assert.match(call.url,/isEnterpriseClient=false/);
+  assert.equal(new URL(call.url).searchParams.has('from'),false,'let the server detect the source language');
+  assert.deepEqual(JSON.parse(call.options.body),['Hello','World'],'the body is the raw text array');
+});
+
+test('a mismatched Microsoft batch fails instead of writing half a translation', async () => {
+  const h=harness(()=>({ok:true,json:async()=>[{translations:[{text:'只有一条'}]}]}));
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'microsoft'},consent:true});
+  await h.send({type:'BEGIN_TASK',taskId:'ms2'},h.page);
+  await assert.rejects(h.send({type:'TRANSLATE',taskId:'ms2',texts:['One','Two']},h.page),/数量不匹配/);
+});
+
+test('switching to Microsoft keeps the stored AI key', async () => {
+  const h=harness();
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},apiKey:'keep-me',consent:true});
+  await h.send({type:'SAVE_SETTINGS',settings:{service:'microsoft'},consent:true});
+  const back=await h.send({type:'SAVE_SETTINGS',settings:{service:'openai'},consent:true});
+  assert.equal(back.hasKey,true,'the free channel owns a separate credential slot');
+  assert.equal(h.data.local.credential.apiKey,'keep-me');
+});
