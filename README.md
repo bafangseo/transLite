@@ -11,7 +11,7 @@
 **除 Chrome 外，也支持 Steam 客户端内置浏览器，包含 Steam 创意工坊。**
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-安装-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/dkjbikoamkfpmmfaodleccdefonkjebb)
-![Version](https://img.shields.io/badge/version-1.1.1-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-34A853)
 ![Chrome 120+](https://img.shields.io/badge/Chrome-120%2B-FBBC04)
 ![Steam](https://img.shields.io/badge/Steam-内置浏览器%20%2B%20创意工坊-1B2838?logo=steam&logoColor=white)
@@ -213,7 +213,7 @@ Steam 客户端内置的浏览器基于 CEF，**没有扩展工具栏**：没有
 npm ci                          # 安装 Playwright
 npx playwright install chromium # 下载测试用 Chromium
 npm test                        # 单元测试 + 浏览器测试
-npm run package                 # 生成 dist/transLite-1.1.1.zip
+npm run package                 # 生成 dist/transLite-1.2.0.zip
 ```
 
 ### 测试覆盖
@@ -223,7 +223,7 @@ npm run package                 # 生成 dist/transLite-1.1.1.zip
 | 单元测试 (`tests/*.mjs`) | 请求与权限边界、模型参数策略、密钥 AES‑GCM 加密与解锁、URL 校验、取消 / 重试、DOM 分段与恢复、Linear / LiteLLM / Steam 适配器 |
 | 浏览器测试 (`tests/browser/*.mjs`) | 真实 DOM 与动态网页的增量翻译、弹窗停止 / 部分失败状态、**安装后的 MV3 扩展全流程**（真实 service worker、扩展存储、连接测试、站点自动注册 / 移除、后台强制终止后唤醒、重启后解锁） |
 
-网络测试只连接本机模拟服务，不使用真实 API Key，不消耗付费额度。安装测试仅在临时 Manifest 中预授权 `http://127.0.0.1/*` 以绕过无头模式无法操作的原生权限弹窗；正式 Manifest 保持按需授权，打包脚本会校验这一点。原生授权弹窗和真实服务的人工验收项见 [发布说明](docs/release-1.1.1.md)。
+网络测试只连接本机模拟服务，不使用真实 API Key，不消耗付费额度。安装测试仅在临时 Manifest 中预授权 `http://127.0.0.1/*` 以绕过无头模式无法操作的原生权限弹窗；正式 Manifest 保持按需授权，打包脚本会校验这一点。原生授权弹窗和真实服务的人工验收项见 [发布说明](docs/release-1.2.0.md)。
 
 ### 打包
 

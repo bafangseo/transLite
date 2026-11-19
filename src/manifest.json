@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "久远的翻译工具",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "轻量双语翻译，支持 Google、微软、DeepL 和自带密钥的 AI 接口；按需翻译，保留网页布局。",
   "permissions": [
     "storage",
